@@ -1,0 +1,7 @@
+# This is not a monorepo. pnpm requires `packages` to be non-empty when this file exists, and this
+# file is the only place pnpm reads `storeDir` from. The store lives in the repository so that it is
+# shared with (and persisted across) the devcontainer bind mount.
+packages:
+  - .
+
+storeDir: ./.pnpm-store

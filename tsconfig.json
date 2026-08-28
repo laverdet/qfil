@@ -1,0 +1,33 @@
+{
+	"compilerOptions": {
+		// Sources
+		"rootDir": ".",
+		"outDir": "dist",
+
+		// Language & emit settings
+		"declaration": true,
+		"declarationMap": true,
+		"importHelpers": true,
+		"incremental": true,
+		"sourceMap": true,
+		"target": "esnext",
+		"verbatimModuleSyntax": true,
+
+		// Module resolution settings
+		"lib": [ "esnext" ],
+		"module": "nodenext",
+		"moduleResolution": "nodenext",
+		"types": [ "node" ],
+
+		// Strictness
+		"exactOptionalPropertyTypes": true,
+		"isolatedModules": true,
+		"noEmitOnError": false,
+		"noImplicitOverride": true,
+		"noUncheckedIndexedAccess": true,
+		"skipLibCheck": true,
+		"strict": true,
+	},
+	"include": [ "." ],
+	"exclude": [ ".pnpm-store", "dist", "node_modules" ],
+}
