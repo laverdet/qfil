@@ -1,8 +1,7 @@
 /**
- * Intrinsics: what compiled filters call directly — field access, indexing, iteration, the
- * operators, paths and the `@format`s. Every function here is named in the output of the compiler,
- * which is why the module is flat and the names are short; nothing in it knows about the syntax
- * tree. Named functions live in `index.ts`.
+ * The operations on values: field access, indexing, iteration, the operators, paths and the
+ * `@format`s. The runtime (`runtime.ts`) gives the language's constructs their meaning in terms of
+ * these; the library (`index.ts`) is built on them too. Nothing here knows about syntax.
  */
 import type { Value, ValueObject } from './value.js';
 import { Halt, JqError, compare, copyObject, describe, equal, isObject, newObject, tojson, tostring, typeOf } from './value.js';
@@ -461,89 +460,6 @@ export function *tryCatch<Type>(body: Iterable<Type>, handler: ((error: Value) =
 }
 
 export type Path = Value[];
-
-/** A filter argument handed to a compiled function: its value form, carrying its path form. */
-export interface Closure {
-	(input: Value): Iterable<Value>;
-	readonly path: (path: Path, value: Value) => Iterable<[ Path, Value ]>;
-}
-
-export function closure(value: (input: Value) => Iterable<Value>, path: Closure['path']): Closure {
-	return Object.assign(value, { path });
-}
-
-/** What a compiled filter can reach at runtime, besides its input. */
-export interface Context {
-	readonly args: Readonly<Record<string, Value>>;
-	readonly env: Readonly<Record<string, string>>;
-	/** The next input, for `input`; throws when there are none left. */
-	readonly input: () => Value;
-	/** Every remaining input, for `inputs`. */
-	readonly inputs: () => Iterable<Value>;
-	readonly debug: (value: Value) => void;
-	readonly stderr: (value: Value) => void;
-}
-
-/** Positions of a library function's parameters that are filters rather than values. */
-export const closures: unique symbol = Symbol('jssq.closures');
-
-/** A library function's path form: `[path, value]` pairs for a path and value in place of an input. */
-export const pathForm: unique symbol = Symbol('jssq.path');
-
-/**
- * A library function: called with the context as `this`, then the input, then its arguments —
- * values, or for the parameters it marks as closures, `Closure`s. Written as a generator function
- * it yields a stream; otherwise it returns one value.
- */
-export interface LibFunction {
-	(this: Context, input: Value, ...args: any[]): Value | Iterable<Value>;
-	readonly [closures]?: readonly number[];
-	readonly [pathForm]?: (this: Context, path: Path, value: Value, ...args: any[]) => Iterable<[ Path, Value ]>;
-}
-
-export type Lib = Readonly<Record<string, LibFunction>>;
-
-/** What the compiler cannot read off a library function itself. */
-export interface Annotations {
-	readonly closures?: LibFunction[typeof closures];
-}
-
-export function runtimeFunction<Fn extends LibFunction>(fn: Fn, descriptor: Annotations): Fn {
-	return Object.assign(fn, { [closures]: descriptor.closures });
-}
-
-/** A library function that is also a path expression: its value form, then its path form. */
-export function runtimePathFunction<Fn extends LibFunction>(expr: Fn, path: NonNullable<LibFunction[typeof pathForm]>, descriptor: Annotations = {}): Fn {
-	return Object.assign(expr, { [closures]: descriptor.closures, [pathForm]: path });
-}
-
-const GeneratorFunction = Object.getPrototypeOf(function*() {}) as { constructor: new () => unknown };
-
-/** Whether a library function yields a stream, read off the function itself. */
-export function isStream(fn: LibFunction): boolean {
-	return fn instanceof GeneratorFunction.constructor;
-}
-
-/** A library function called as a path expression; one without a path form is invalid there, as jq has it. */
-export function *pathCall(fn: LibFunction, ctx: Context, path: Path, value: Value, ...args: unknown[]): Generator<[ Path, Value ]> {
-	const impl = fn[pathForm];
-	if (impl !== undefined) {
-		yield* impl.call(ctx, path, value, ...args);
-		return;
-	}
-	const result = fn.call(ctx, value, ...args);
-	for (const output of isStream(fn) ? result as Iterable<Value> : [ result as Value ]) {
-		invalidPath(output);
-	}
-}
-
-/** A named argument, `$name`, as a program binds it when instantiated. */
-export function argument(args: Readonly<Record<string, Value>>, name: string): Value {
-	if (!Object.hasOwn(args, name)) {
-		throw new JqError(`$${name} is not defined`);
-	}
-	return args[name]!;
-}
 
 export function invalidPath(value: Value): never {
 	throw new JqError(`Invalid path expression with result ${tojson(value)}`);

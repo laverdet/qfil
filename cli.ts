@@ -9,7 +9,7 @@ import * as util from 'node:util';
 import { CompileError } from './compiler.js';
 import { Halt, JqError, compareStrings, isObject, newObject, tojson } from './lib/value.js';
 import { ParseError } from './parser.js';
-import { compile, render } from './index.js';
+import { compile } from './index.js';
 
 const USAGE = `usage: jssq [options] <filter> [file...]
 
@@ -26,7 +26,6 @@ const USAGE = `usage: jssq [options] <filter> [file...]
   -e, --exit-status      exit 1 when the last output is false or null, 4 when there is none
       --arg <name> <value>     bind $name to a string
       --argjson <name> <json>  bind $name to a JSON value
-      --render           print the compiled JavaScript instead of running it
   -h, --help
 `;
 
@@ -173,7 +172,6 @@ export function main(argv: readonly string[]): number {
 			tab: { type: 'boolean' },
 			indent: { type: 'string' },
 			'exit-status': { type: 'boolean', short: 'e' },
-			render: { type: 'boolean' },
 			help: { type: 'boolean', short: 'h' },
 		},
 	});
@@ -185,10 +183,6 @@ export function main(argv: readonly string[]): number {
 	if (source === undefined) {
 		process.stderr.write(USAGE);
 		return 2;
-	}
-	if (flags.render === true) {
-		process.stdout.write(`${render(source).code}\n`);
-		return 0;
 	}
 	// Inputs are read when something first asks for one, so that `-n` without `input` reads nothing
 	const inputs = function*(): Iterable<Value> {
@@ -229,7 +223,7 @@ export function main(argv: readonly string[]): number {
 		process.stdout.write(`${flags['ascii-output'] === true ? escapeNonAscii(line) : line}${separator}`);
 	};
 	const run = (input: Value) => {
-		if (filter.shape === 'stream') {
+		if (filter.stream) {
 			for (const output of filter(input)) {
 				write(output);
 			}

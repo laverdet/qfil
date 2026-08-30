@@ -1,18 +1,22 @@
 /**
- * The default library: named functions keyed by `name/arity`. Each is called with the run's context
- * as `this`, then the input, then its arguments as values, once per combination of the arguments'
- * outputs — except a parameter marked by `runtimeFunction(fn, { closures: [ … ] })`, which arrives as a
- * closure: a function of an input yielding a stream, carrying its path form as `.path`. A function
- * written as a generator yields a stream; any other returns exactly one value. One that is meaningful
- * as a path expression — `select`, `first`, `getpath` — is declared with `runtimePathFunction(expr, path)`.
- * That is the whole of a declaration: the compiler reads the shape off the function itself and the
- * rest off symbols on it.
+ * The default library: named functions keyed by `name/arity`. Each receives the syntax of its
+ * arguments and a `Render`, with the run's context as `this`, and returns the filter of a call:
+ * a function of an input and an environment, a generator function when it yields a stream. That
+ * is the whole of a declaration. A function that is also a path expression — `select`, `first`,
+ * `getpath` — is declared with `runtimePathFunction(value, path)`.
+ *
+ * An argument is whatever the function makes of it: `values` evaluates arguments as jq's `$`
+ * parameters (once per combination of their outputs); `render.generator` takes one as a filter to
+ * run; `render.path` takes one as a path expression; and `constant` reads a literal off the
+ * syntax, which is how `test("^a")` compiles its pattern once.
  *
  * `compile` takes a `lib` option, so an application may supply a library of its own.
  */
-import type { Closure, Context, Lib } from './intrinsics.js';
+import type * as ast from '../ast.js';
+import type { Context, Env, Lib, LibFunction, Render, Stream } from './filter.js';
 import type { Value, ValueObject } from './value.js';
-import { add, delpaths, field, getpath, halt, has, iterate, keys, length, recursePaths, runtimeFunction, runtimePathFunction, setpath, split } from './intrinsics.js';
+import { constant, runtimePathFunction, streams, values } from './filter.js';
+import { add, delpaths, field, getpath, halt, has, iterate, keys, length, recursePaths, setpath, split } from './intrinsics.js';
 import { JqError, compare, describe, fromjson, isObject, newObject, tojson, tonumber, tostring, truthy, typeOf } from './value.js';
 
 function assertString(value: Value, what: string): string {
@@ -36,10 +40,22 @@ function assertNumber(value: Value, what: string): number {
 	return value;
 }
 
+/** A library function of the input alone. */
+function unary(fn: (input: Value) => Value): LibFunction {
+	return () => input => fn(input);
+}
+
+/** A stream drawn from outside the program, as `inputs` is. */
+function fromIterable(source: () => Iterable<Value>): Stream {
+	return function*() {
+		yield* source();
+	};
+}
+
 /** `[.[] | f]` over any iterable of values. */
-function mapOver(values: Iterable<Value>, filter: (value: Value) => Iterable<Value>): Value[] {
+function mapOver(inputs: Iterable<Value>, filter: (value: Value) => Iterable<Value>): Value[] {
 	const result: Value[] = [];
-	for (const value of values) {
+	for (const value of inputs) {
 		result.push(...filter(value));
 	}
 	return result;
@@ -65,8 +81,8 @@ function groups(values: Value[], keys: Value[]): Value[][] {
 }
 
 /** `sort_by(f)` keys: `[f]` of each element. */
-function keysBy(values: Value[], filter: Closure): Value[] {
-	return values.map(value => [ ...filter(value) ]);
+function keysBy(values: Value[], filter: Stream, env: Env): Value[] {
+	return values.map(value => [ ...filter(value, env) ]);
 }
 
 function flatten(value: Value): Value[] {
@@ -145,36 +161,56 @@ function *unroll(step: Iterable<Value | Recur>): Generator<Value> {
 }
 
 /** `def repeat(f): ., (f | repeat(f));` — which is also `recurse(f)`. */
-function *repeat(state: Value, update: Closure): Generator<Value | Recur> {
+function *repeat(state: Value, env: Env, update: Stream): Generator<Value | Recur> {
 	yield state;
-	for (const next of update(state)) {
-		yield new Recur(repeat(next, update));
+	for (const next of update(state, env)) {
+		yield new Recur(repeat(next, env, update));
 	}
 }
 
 /** `def until(cond; update): if cond then . else (update | until(cond; update)) end;` */
-function *until(state: Value, cond: Closure, update: Closure): Generator<Value | Recur> {
-	for (const test of cond(state)) {
+function *until(state: Value, env: Env, cond: Stream, update: Stream): Generator<Value | Recur> {
+	for (const test of cond(state, env)) {
 		if (truthy(test)) {
 			yield state;
 		} else {
-			for (const next of update(state)) {
-				yield new Recur(until(next, cond, update));
+			for (const next of update(state, env)) {
+				yield new Recur(until(next, env, cond, update));
 			}
 		}
 	}
 }
 
 /** `def while(cond; update): if cond then ., (update | while(cond; update)) else empty end;` */
-function *loop(state: Value, cond: Closure, update: Closure): Generator<Value | Recur> {
-	for (const test of cond(state)) {
+function *loop(state: Value, env: Env, cond: Stream, update: Stream): Generator<Value | Recur> {
+	for (const test of cond(state, env)) {
 		if (truthy(test)) {
 			yield state;
-			for (const next of update(state)) {
-				yield new Recur(loop(next, cond, update));
+			for (const next of update(state, env)) {
+				yield new Recur(loop(next, env, cond, update));
 			}
 		}
 	}
+}
+
+/** `walk(f)`: `f` applied bottom-up; a member whose result is empty is dropped, as `|=` drops it. */
+function *walk(value: Value, env: Env, filter: Stream): Generator<Value> {
+	const inner = function() {
+		if (Array.isArray(value)) {
+			return mapOver(value, element => walk(element, env, filter));
+		} else if (isObject(value)) {
+			const result = newObject();
+			for (const key of Object.keys(value)) {
+				const [ output ] = walk(value[key]!, env, filter);
+				if (output !== undefined) {
+					result[key] = output;
+				}
+			}
+			return result;
+		}
+		return value;
+	}();
+	yield* filter(inner, env);
 }
 
 function rangeBound(value: Value): number {
@@ -201,24 +237,18 @@ function *head<Type>(outputs: Iterable<Type>): Generator<Type> {
 	}
 }
 
-/** `walk(f)`: `f` applied bottom-up; a member whose result is empty is dropped, as `|=` drops it. */
-function *walk(value: Value, filter: Closure): Generator<Value> {
-	const inner = function() {
-		if (Array.isArray(value)) {
-			return mapOver(value, element => walk(element, filter));
-		} else if (isObject(value)) {
-			const result = newObject();
-			for (const key of Object.keys(value)) {
-				const [ output ] = walk(value[key]!, filter);
-				if (output !== undefined) {
-					result[key] = output;
-				}
-			}
-			return result;
+/** At most `count` outputs of a stream. */
+function *limited<Type>(count: Value, outputs: Iterable<Type>): Generator<Type> {
+	let remaining = limitCount(count);
+	if (remaining <= 0) {
+		return;
+	}
+	for (const output of outputs) {
+		yield output;
+		if (--remaining <= 0) {
+			return;
 		}
-		return value;
-	}();
-	yield* filter(inner);
+	}
 }
 
 // Regular expressions are JavaScript's, flags included. `u` and `d` are always set, so patterns
@@ -237,14 +267,35 @@ function regex(pattern: Value, flags: Value, extra = ''): RegExp {
 	}
 }
 
-/** Every match when the pattern is global, otherwise the first. */
-function execAll(input: Value, pattern: Value, flags: Value): RegExpExecArray[] {
-	const text = assertString(input, 'match');
-	const compiled = regex(pattern, flags);
-	if (compiled.global) {
-		return [ ...text.matchAll(compiled) ];
+/** Runs `body` with a regex for each combination of the pattern and flag arguments' outputs. */
+type WithRegex = (input: Value, env: Env, body: (regex: RegExp, input: Value) => Iterable<Value>) => Iterable<Value>;
+
+/** A regex from its arguments — compiled once when both are literals, otherwise per call: the syntax is there to be read. */
+function regexOf(render: Render, pattern: ast.Node, flags: ast.Node | null, extra = ''): WithRegex {
+	const literalPattern = constant(pattern);
+	const literalFlags = flags === null ? null : constant(flags);
+	if (literalPattern !== undefined && literalFlags !== undefined) {
+		const compiled = regex(literalPattern, literalFlags, extra);
+		return (input, _env, body) => body(compiled, input);
 	}
-	const match = compiled.exec(text);
+	const args = streams(render, flags === null ? [ pattern ] : [ pattern, flags ], function*(_input, re, fl) {
+		yield [ re, fl ?? null ];
+	});
+	return function*(input, env, body) {
+		for (const pair of args(input, env)) {
+			const [ re, fl ] = pair as [ Value, Value ];
+			yield* body(regex(re, fl, extra), input);
+		}
+	};
+}
+
+/** Every match when the pattern is global, otherwise the first. */
+function execAll(regex: RegExp, input: Value): RegExpExecArray[] {
+	const text = assertString(input, 'match');
+	if (regex.global) {
+		return [ ...text.matchAll(regex) ];
+	}
+	const match = regex.exec(text);
 	return match === null ? [] : [ match ];
 }
 
@@ -274,9 +325,9 @@ function namedGroups(match: RegExpExecArray): ValueObject {
  * `sub` and `gsub`. The replacement filter runs once per match with the named groups as its input;
  * when it yields several strings, the k-th result replaces every match with its k-th one.
  */
-function *substitute(input: Value, pattern: Value, flags: Value, replacement: Closure): Generator<string> {
+function *substitute(regex: RegExp, input: Value, replacement: (groups: Value) => Iterable<Value>): Generator<string> {
 	const text = assertString(input, 'sub');
-	const edits = execAll(text, pattern, flags).map(match => ({
+	const edits = execAll(regex, text).map(match => ({
 		start: match.index,
 		end: match.index + match[0].length,
 		outputs: [ ...replacement(namedGroups(match)) ].map(output => typeof output === 'string' ? output : function() {
@@ -299,191 +350,218 @@ function *substitute(input: Value, pattern: Value, flags: Value, replacement: Cl
 	}
 }
 
+function regexFunction(flags: (args: readonly ast.Node[]) => ast.Node | null, extra: string, body: (regex: RegExp, input: Value) => Iterable<Value>): LibFunction {
+	return (args, render) => {
+		const regexes = regexOf(render, args[0]!, flags(args), extra);
+		return function*(input, env) {
+			yield* regexes(input, env, body);
+		};
+	};
+}
+
+function subFunction(flags: (args: readonly ast.Node[]) => ast.Node | null, extra: string): LibFunction {
+	return (args, render) => {
+		const regexes = regexOf(render, args[0]!, flags(args), extra);
+		const replacement = render.generator(args[1]!);
+		return function*(input, env) {
+			yield* regexes(input, env, (compiled, text) => substitute(compiled, text, groups => replacement(groups, env)));
+		};
+	};
+}
+
+function *testWith(compiled: RegExp, input: Value): Generator<Value> {
+	yield compiled.test(assertString(input, 'test'));
+}
+
+function matchWith(compiled: RegExp, input: Value): Value[] {
+	return execAll(compiled, input).map(matchObject);
+}
+
+function *splitWith(compiled: RegExp, input: Value): Generator<Value> {
+	const text = assertString(input, 'split');
+	const pieces: string[] = [];
+	let previous = 0;
+	for (const match of text.matchAll(compiled)) {
+		pieces.push(text.slice(previous, match.index));
+		previous = match.index + match[0].length;
+	}
+	pieces.push(text.slice(previous));
+	yield pieces;
+}
+
 export const lib: Lib = {
-	'not/0'(input) {
-		return !truthy(input);
-	},
-	'error/0'(input) {
+	'not/0': unary(input => !truthy(input)),
+	'error/0': unary(input => {
 		throw new JqError(input);
-	},
-	'error/1'(_input, message: Value) {
+	}),
+	'error/1': (args, render) => values(render, args, (_input, message) => {
 		throw new JqError(message);
-	},
-	'length/0'(input) {
-		return length(input);
-	},
-	'type/0'(input) {
-		return typeOf(input);
-	},
-	'keys/0'(input) {
-		return keys(input);
-	},
-	'has/1'(input, key: Value) {
-		return has(input, key);
-	},
-	'add/0'(input) {
-		return [ ...iterate(input) ].reduce(add, null);
-	},
-	'tostring/0'(input) {
-		return tostring(input);
-	},
-	'tonumber/0'(input) {
-		return tonumber(input);
-	},
-	'tojson/0'(input) {
-		return tojson(input);
-	},
-	'fromjson/0'(input) {
-		return fromjson(assertString(input, 'fromjson'));
-	},
+	}),
+	'length/0': () => length,
+	'type/0': () => typeOf,
+	'keys/0': () => keys,
+	'has/1': (args, render) => values(render, args, (input, key) => has(input, key)),
+	'add/0': unary(input => [ ...iterate(input) ].reduce(add, null)),
+	'tostring/0': () => tostring,
+	'tonumber/0': () => tonumber,
+	'tojson/0': unary(input => tojson(input)),
+	'fromjson/0': unary(input => fromjson(assertString(input, 'fromjson'))),
 	'getpath/1': runtimePathFunction(
-		(input: Value, path: Value) => getpath(input, path),
-		function*(path, value, sub: Value) {
-			const found = getpath(value, sub);
-			yield [ [ ...path, ...sub as Value[] ], found ];
+		(args, render) => values(render, args, (input, path) => getpath(input, path)),
+		(args, render) => {
+			const paths = render.generator(args[0]!);
+			return function*(path, value, env) {
+				for (const sub of paths(value, env)) {
+					const found = getpath(value, sub);
+					yield [ [ ...path, ...sub as Value[] ], found ];
+				}
+			};
 		},
 	),
-	'setpath/2'(input, path: Value, value: Value) {
-		return setpath(input, path, value);
-	},
-	'delpaths/1'(input, paths: Value) {
-		return delpaths(input, paths);
-	},
-	*'paths/0'(input) {
+	'setpath/2': (args, render) => values(render, args, (input, path, value) => setpath(input, path, value)),
+	'delpaths/1': (args, render) => values(render, args, (input, paths) => delpaths(input, paths)),
+	'paths/0': () => function*(input) {
 		for (const [ path ] of recursePaths([], input)) {
 			if (path.length > 0) {
 				yield path;
 			}
 		}
 	},
-	'to_entries/0'(input) {
-		return toEntries(input);
+	'to_entries/0': () => toEntries,
+	'from_entries/0': () => fromEntries,
+	'with_entries/1': (args, render) => {
+		const filter = render.generator(args[0]!);
+		return (input, env) => fromEntries(mapOver(toEntries(input), entry => filter(entry, env)));
 	},
-	'from_entries/0'(input) {
-		return fromEntries(input);
+	'map/1': (args, render) => {
+		const filter = render.generator(args[0]!);
+		return (input, env) => mapOver(iterate(input), value => filter(value, env));
 	},
-	'with_entries/1': runtimeFunction(
-		(input: Value, filter: Closure) => fromEntries(mapOver(toEntries(input), filter)),
-		{ closures: [ 0 ] },
-	),
-	'map/1': runtimeFunction(
-		(input: Value, filter: Closure) => mapOver(iterate(input), filter),
-		{ closures: [ 0 ] },
-	),
-	'recurse/1': runtimeFunction(
-		function*(input: Value, update: Closure) {
-			yield* unroll(repeat(input, update));
-		},
-		{ closures: [ 0 ] },
-	),
-	'repeat/1': runtimeFunction(
-		function*(input: Value, update: Closure) {
-			yield* unroll(repeat(input, update));
-		},
-		{ closures: [ 0 ] },
-	),
-	'until/2': runtimeFunction(
-		function*(input: Value, cond: Closure, update: Closure) {
-			yield* unroll(until(input, cond, update));
-		},
-		{ closures: [ 0, 1 ] },
-	),
-	'while/2': runtimeFunction(
-		function*(input: Value, cond: Closure, update: Closure) {
-			yield* unroll(loop(input, cond, update));
-		},
-		{ closures: [ 0, 1 ] },
-	),
+	'recurse/1': (args, render) => {
+		const update = render.generator(args[0]!);
+		return function*(input, env) {
+			yield* unroll(repeat(input, env, update));
+		};
+	},
+	'repeat/1': (args, render) => {
+		const update = render.generator(args[0]!);
+		return function*(input, env) {
+			yield* unroll(repeat(input, env, update));
+		};
+	},
+	'until/2': (args, render) => {
+		const cond = render.generator(args[0]!);
+		const update = render.generator(args[1]!);
+		return function*(input, env) {
+			yield* unroll(until(input, env, cond, update));
+		};
+	},
+	'while/2': (args, render) => {
+		const cond = render.generator(args[0]!);
+		const update = render.generator(args[1]!);
+		return function*(input, env) {
+			yield* unroll(loop(input, env, cond, update));
+		};
+	},
+	'walk/1': (args, render) => {
+		const filter = render.generator(args[0]!);
+		return function*(input, env) {
+			yield* walk(input, env, filter);
+		};
+	},
 	'empty/0': runtimePathFunction(
-		function*() {
+		() => function*() {
 			yield* [];
 		},
-		function*() {
+		() => function*() {
 			yield* [];
 		},
 	),
-	'path/1': runtimeFunction(
-		function*(input: Value, filter: Closure) {
-			for (const [ path ] of filter.path([], input)) {
+	'path/1': (args, render) => {
+		const paths = render.path(args[0]!);
+		return function*(input, env) {
+			for (const [ path ] of paths([], input, env)) {
 				yield path;
 			}
-		},
-		{ closures: [ 0 ] },
-	),
-	'del/1': runtimeFunction(
-		(input: Value, filter: Closure) => delpaths(input, [ ...filter.path([], input) ].map(([ path ]) => path)),
-		{ closures: [ 0 ] },
-	),
+		};
+	},
+	'del/1': (args, render) => {
+		const paths = render.path(args[0]!);
+		return (input, env) => delpaths(input, [ ...paths([], input, env) ].map(([ path ]) => path));
+	},
 	'select/1': runtimePathFunction(
-		function*(input: Value, condition: Closure) {
-			for (const test of condition(input)) {
-				if (truthy(test)) {
-					yield input;
+		(args, render) => {
+			const condition = render.generator(args[0]!);
+			return function*(input, env) {
+				for (const test of condition(input, env)) {
+					if (truthy(test)) {
+						yield input;
+					}
 				}
-			}
+			};
 		},
-		function*(path, value, condition: Closure) {
-			for (const test of condition(value)) {
-				if (truthy(test)) {
-					yield [ path, value ];
+		(args, render) => {
+			const condition = render.generator(args[0]!);
+			return function*(path, value, env) {
+				for (const test of condition(value, env)) {
+					if (truthy(test)) {
+						yield [ path, value ];
+					}
 				}
-			}
+			};
 		},
-		{ closures: [ 0 ] },
 	),
 	'first/1': runtimePathFunction(
-		function*(input: Value, filter: Closure) {
-			yield* head(filter(input));
+		(args, render) => {
+			const filter = render.generator(args[0]!);
+			return function*(input, env) {
+				yield* head(filter(input, env));
+			};
 		},
-		function*(path, value, filter: Closure) {
-			yield* head(filter.path(path, value));
+		(args, render) => {
+			const filter = render.path(args[0]!);
+			return function*(path, value, env) {
+				yield* head(filter(path, value, env));
+			};
 		},
-		{ closures: [ 0 ] },
 	),
 	'limit/2': runtimePathFunction(
-		function*(input: Value, count: Value, filter: Closure) {
-			let remaining = limitCount(count);
-			if (remaining <= 0) {
-				return;
-			}
-			for (const output of filter(input)) {
-				yield output;
-				if (--remaining <= 0) {
-					return;
+		(args, render) => {
+			const counts = render.generator(args[0]!);
+			const filter = render.generator(args[1]!);
+			return function*(input, env) {
+				for (const count of counts(input, env)) {
+					yield* limited(count, filter(input, env));
 				}
-			}
+			};
 		},
-		function*(path, value, count: Value, filter: Closure) {
-			let remaining = limitCount(count);
-			if (remaining <= 0) {
-				return;
-			}
-			for (const pair of filter.path(path, value)) {
-				yield pair;
-				if (--remaining <= 0) {
-					return;
+		(args, render) => {
+			const counts = render.generator(args[0]!);
+			const filter = render.path(args[1]!);
+			return function*(path, value, env) {
+				for (const count of counts(value, env)) {
+					yield* limited(count, filter(path, value, env));
 				}
-			}
+			};
 		},
-		{ closures: [ 1 ] },
 	),
-	'isempty/1': runtimeFunction(
-		(input: Value, filter: Closure) => filter(input)[Symbol.iterator]().next().done === true,
-		{ closures: [ 0 ] },
-	),
-	*'range/1'(input, upto: Value) {
+	'isempty/1': (args, render) => {
+		const filter = render.generator(args[0]!);
+		return (input, env) => filter(input, env)[Symbol.iterator]().next().done === true;
+	},
+	'range/1': (args, render) => streams(render, args, function*(_input, upto) {
 		const end = rangeBound(upto);
 		for (let ii = 0; ii < end; ++ii) {
 			yield ii;
 		}
-	},
-	*'range/2'(input, from: Value, upto: Value) {
+	}),
+	'range/2': (args, render) => streams(render, args, function*(_input, from, upto) {
 		const end = rangeBound(upto);
 		for (let ii = rangeBound(from); ii < end; ++ii) {
 			yield ii;
 		}
-	},
-	*'range/3'(input, from: Value, upto: Value, by: Value) {
+	}),
+	'range/3': (args, render) => streams(render, args, function*(_input, from, upto, by) {
 		const step = rangeBound(by);
 		const end = rangeBound(upto);
 		if (step > 0) {
@@ -495,149 +573,76 @@ export const lib: Lib = {
 				yield ii;
 			}
 		}
-	},
+	}),
 	'input/0'(this: Context) {
-		return this.input();
+		return () => this.input();
 	},
-	*'inputs/0'(this: Context) {
-		yield* this.inputs();
+	'inputs/0'(this: Context) {
+		return fromIterable(() => this.inputs());
 	},
-	'debug/0'(this: Context, input) {
-		this.debug(input);
-		return input;
+	'debug/0'(this: Context) {
+		return (input: Value) => {
+			this.debug(input);
+			return input;
+		};
 	},
-	'stderr/0'(this: Context, input) {
-		this.stderr(input);
-		return input;
+	'stderr/0'(this: Context) {
+		return (input: Value) => {
+			this.stderr(input);
+			return input;
+		};
 	},
-	'walk/1': runtimeFunction(
-		function*(input: Value, filter: Closure) {
-			yield* walk(input, filter);
-		},
-		{ closures: [ 0 ] },
-	),
-	'any/0'(input) {
-		return [ ...iterate(input) ].some(truthy);
+	'any/0': unary(input => [ ...iterate(input) ].some(truthy)),
+	'all/0': unary(input => [ ...iterate(input) ].every(truthy)),
+	'first/0': unary(input => assertArray(input, 'first')[0] ?? null),
+	'last/0': unary(input => assertArray(input, 'last').at(-1) ?? null),
+	'sort/0': unary(input => [ ...assertArray(input, 'sort') ].sort(compare)),
+	'sort_by/1': (args, render) => {
+		const filter = render.generator(args[0]!);
+		return (input, env) => {
+			const items = assertArray(input, 'sort_by');
+			return order(items, keysBy(items, filter, env)).map(ii => items[ii]!);
+		};
 	},
-	'all/0'(input) {
-		return [ ...iterate(input) ].every(truthy);
+	'group_by/1': (args, render) => {
+		const filter = render.generator(args[0]!);
+		return (input, env) => {
+			const items = assertArray(input, 'group_by');
+			return groups(items, keysBy(items, filter, env));
+		};
 	},
-	'first/0'(input) {
-		return assertArray(input, 'first')[0] ?? null;
-	},
-	'last/0'(input) {
-		return assertArray(input, 'last').at(-1) ?? null;
-	},
-	'sort/0'(input) {
-		return [ ...assertArray(input, 'sort') ].sort(compare);
-	},
-	'sort_by/1': runtimeFunction(
-		(input: Value, filter: Closure) => {
-			const values = assertArray(input, 'sort_by');
-			return order(values, keysBy(values, filter)).map(ii => values[ii]!);
-		},
-		{ closures: [ 0 ] },
-	),
-	'group_by/1': runtimeFunction(
-		(input: Value, filter: Closure) => {
-			const values = assertArray(input, 'group_by');
-			return groups(values, keysBy(values, filter));
-		},
-		{ closures: [ 0 ] },
-	),
-	'unique/0'(input) {
-		const values = assertArray(input, 'unique');
-		return groups(values, values).map(group => group[0]!);
-	},
-	'reverse/0'(input) {
-		return input === null ? [] : [ ...assertArray(input, 'reverse') ].reverse();
-	},
-	'flatten/0'(input) {
-		return flatten(input);
-	},
-	'startswith/1'(input, prefix: Value) {
-		return assertString(input, 'startswith').startsWith(assertString(prefix, 'startswith'));
-	},
-	'endswith/1'(input, suffix: Value) {
-		return assertString(input, 'endswith').endsWith(assertString(suffix, 'endswith'));
-	},
-	'ltrimstr/1'(input, prefix: Value) {
+	'unique/0': unary(input => {
+		const items = assertArray(input, 'unique');
+		return groups(items, items).map(group => group[0]!);
+	}),
+	'reverse/0': unary(input => input === null ? [] : [ ...assertArray(input, 'reverse') ].reverse()),
+	'flatten/0': unary(flatten),
+	'startswith/1': (args, render) => values(render, args, (input, prefix) => assertString(input, 'startswith').startsWith(assertString(prefix, 'startswith'))),
+	'endswith/1': (args, render) => values(render, args, (input, suffix) => assertString(input, 'endswith').endsWith(assertString(suffix, 'endswith'))),
+	'ltrimstr/1': (args, render) => values(render, args, (input, prefix) => {
 		const text = assertString(input, 'ltrimstr');
 		return typeof prefix === 'string' && text.startsWith(prefix) ? text.slice(prefix.length) : text;
-	},
-	'rtrimstr/1'(input, suffix: Value) {
+	}),
+	'rtrimstr/1': (args, render) => values(render, args, (input, suffix) => {
 		const text = assertString(input, 'rtrimstr');
 		return typeof suffix === 'string' && suffix !== '' && text.endsWith(suffix) ? text.slice(0, -suffix.length) : text;
-	},
-	'split/1'(input, separator: Value) {
-		return split(assertString(input, 'split'), assertString(separator, 'split'));
-	},
-	'split/2'(input, pattern: Value, flags: Value) {
-		const text = assertString(input, 'split');
-		const pieces: string[] = [];
-		let previous = 0;
-		for (const match of text.matchAll(regex(pattern, flags, 'g'))) {
-			pieces.push(text.slice(previous, match.index));
-			previous = match.index + match[0].length;
-		}
-		pieces.push(text.slice(previous));
-		return pieces;
-	},
-	'join/1'(input, separator: Value) {
-		return join(input, separator);
-	},
-	'ascii_downcase/0'(input) {
-		return assertString(input, 'ascii_downcase').replace(/[A-Z]+/g, text => text.toLowerCase());
-	},
-	'ascii_upcase/0'(input) {
-		return assertString(input, 'ascii_upcase').replace(/[a-z]+/g, text => text.toUpperCase());
-	},
-	'test/1'(input, pattern: Value) {
-		return regex(pattern, null).test(assertString(input, 'test'));
-	},
-	'test/2'(input, pattern: Value, flags: Value) {
-		return regex(pattern, flags).test(assertString(input, 'test'));
-	},
-	*'match/1'(input, pattern: Value) {
-		yield* execAll(input, pattern, null).map(matchObject);
-	},
-	*'match/2'(input, pattern: Value, flags: Value) {
-		yield* execAll(input, pattern, flags).map(matchObject);
-	},
-	'sub/2': runtimeFunction(
-		function*(input: Value, pattern: Value, replacement: Closure) {
-			yield* substitute(input, pattern, null, replacement);
-		},
-		{ closures: [ 1 ] },
-	),
-	'sub/3': runtimeFunction(
-		function*(input: Value, pattern: Value, replacement: Closure, flags: Value) {
-			yield* substitute(input, pattern, flags, replacement);
-		},
-		{ closures: [ 1 ] },
-	),
-	'gsub/2': runtimeFunction(
-		function*(input: Value, pattern: Value, replacement: Closure) {
-			yield* substitute(input, pattern, 'g', replacement);
-		},
-		{ closures: [ 1 ] },
-	),
-	'floor/0'(input) {
-		return Math.floor(assertNumber(input, 'floor'));
-	},
-	'sqrt/0'(input) {
-		return Math.sqrt(assertNumber(input, 'sqrt'));
-	},
-	'pow/2'(_input, base: Value, exponent: Value) {
-		return assertNumber(base, 'pow') ** assertNumber(exponent, 'pow');
-	},
-	'halt/0'() {
-		return halt(0);
-	},
-	'halt_error/0'(input) {
-		return halt(5, input);
-	},
-	'halt_error/1'(input, code: Value) {
-		return halt(assertNumber(code, 'halt_error'), input);
-	},
+	}),
+	'split/1': (args, render) => values(render, args, (input, separator) => split(assertString(input, 'split'), assertString(separator, 'split'))),
+	'split/2': regexFunction(args => args[1]!, 'g', splitWith),
+	'join/1': (args, render) => values(render, args, (input, separator) => join(input, separator)),
+	'ascii_downcase/0': unary(input => assertString(input, 'ascii_downcase').replace(/[A-Z]+/g, text => text.toLowerCase())),
+	'ascii_upcase/0': unary(input => assertString(input, 'ascii_upcase').replace(/[a-z]+/g, text => text.toUpperCase())),
+	'test/1': regexFunction(() => null, '', testWith),
+	'test/2': regexFunction(args => args[1]!, '', testWith),
+	'match/1': regexFunction(() => null, '', matchWith),
+	'match/2': regexFunction(args => args[1]!, '', matchWith),
+	'sub/2': subFunction(() => null, ''),
+	'sub/3': subFunction(args => args[2]!, ''),
+	'gsub/2': subFunction(() => null, 'g'),
+	'floor/0': unary(input => Math.floor(assertNumber(input, 'floor'))),
+	'sqrt/0': unary(input => Math.sqrt(assertNumber(input, 'sqrt'))),
+	'pow/2': (args, render) => values(render, args, (_input, base, exponent) => assertNumber(base, 'pow') ** assertNumber(exponent, 'pow')),
+	'halt/0': () => () => halt(0),
+	'halt_error/0': unary(input => halt(5, input)),
+	'halt_error/1': (args, render) => values(render, args, (input, code) => halt(assertNumber(code, 'halt_error'), input)),
 };

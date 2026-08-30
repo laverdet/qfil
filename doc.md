@@ -1,7 +1,7 @@
 # jssq
 
-A jq-compatible query language compiled to JavaScript. A filter is parsed once and rendered as a
-JavaScript function of its input; the function is then as fast as the loops it turned into.
+A jq-compatible query language, run as JavaScript. A filter is parsed once and assembled into a
+JavaScript function of its input from the functions a runtime gives each piece of its syntax.
 
 ```ts
 import { compile, run } from 'jssq';
@@ -13,7 +13,7 @@ run('[.[] | . * 2]', [ 1, 2, 3 ]); // [ [ 2, 4, 6 ] ]
 ```
 
 At a shell, `jssq` takes jq's common flags: `jssq -c '.[] | .name' data.json`, `-n`, `-r`, `-s`, `-R`,
-`-S`, `--arg`, `--argjson`, `--tab`, `--indent`, `-e`, and `--render` to print the JavaScript instead.
+`-S`, `--arg`, `--argjson`, `--tab`, `--indent` and `-e`.
 
 ## Compatibility
 
@@ -31,6 +31,9 @@ implementation deliberately differs:
 - Error messages approximate jq's; `try … catch .` sees a message of the same general form.
 - `repeat(f)` keeps its documented meaning (`., (f | repeat(f))`); jq 1.8.2 yields `f` of the same
   input forever.
+- A definition that recurses does so on the JavaScript stack, a few thousand levels deep. jq
+  itself turns tail calls into loops; `until`, `while`, `repeat` and `recurse` here run on the
+  heap, but a user-written `def cnt: … | cnt` does not yet.
 - Strings are JavaScript strings: `length`, slices, `match` offsets and ordering all work in UTF-16
   code units where jq uses code points.
 - Regular expressions are JavaScript's `RegExp`, flags and all (`u` and `d` are always on), rather
@@ -45,115 +48,78 @@ implementation deliberately differs:
 
 ## Design
 
-### Shapes are the spec
+### Everything is a filter, and a filter is a function
 
-Every jq expression is a generator of zero or more values. The naive rendering — a generator function
-per node with `yield*` between them — allocates an iterator per node per value and is exactly what
-`compiler.ts` avoids. Each node is instead rendered in continuation-passing style: `stream(node, input,
-scope, emit)` takes an `emit` that renders whatever consumes the node's outputs, and returns statements
-that run that code once per output, inline. `.[] | select(.a) | .b` becomes one `for` loop with one `if`
-in it and a `yield` at the bottom.
+Every jq expression is a generator of zero or more values. Here a filter is a JavaScript function
+of an input and an environment: written as a generator function it yields a stream, otherwise it
+returns exactly one value. That is the whole of a filter's declaration — `isStream` reads it off the
+function itself — and the fact every construct is pure and every binding is constant is what lets
+each piece be built once and reused for every input.
 
-Making that compact needs one fact per node before rendering it: how many outputs it has. That is a
-node's **shape**, and it is the language's only "specification":
+Nothing is turned into source text. A program is *instantiated*: the compiler walks the syntax tree
+and asks, for each node, for the function that gives it meaning. It keeps only what binds names for
+itself — variables, definitions and their parameters, `as`, `reduce`, `foreach`, `label` — and hands
+every other construct, as syntax, to the runtime's handler for it. A handler (`lib/runtime.ts`)
+receives the node and a `Render`, asks back for whatever it needs of the node's children — as a
+value, as a stream, as a path — and returns the filter. The runtime is therefore the semantics of
+the language, one handler per kind of node, and another object of the same shape is another meaning
+for the same syntax.
 
-- `expr` — exactly one value, and renderable as a single JavaScript expression: `.a`, `1 + .b`,
-  `[.x, .y]`, `length`.
-- `single` — exactly one value, but needing statements: `reduce`, `try … catch` with single bodies, a
-  pipe whose left side has to be bound to a name first.
-- `stream` — anything else: `.[]`, `a, b`, `.a?`, `range`, `empty`.
+### Library functions receive syntax
 
-Shapes are computed against a scope (`shape(node, scope)`), because a call has whatever shape its
-definition has, and they live only for the duration of a compilation. Nothing at runtime carries a
-shape explicitly: a compiled filter *is* a plain function if its shape was `expr`/`single` and a
-generator function if it was `stream`, and the same holds for every function the output declares. A
-library function declares its shape the same way — by being written as a generator function or not
-(`lib/index.ts`, `isStream`). The one thing a body cannot say is which of its parameters are filters
-rather than values, and the few functions that take one — `map`, `sort_by`, `sub` — carry that under
-a symbol on the function (`runtimeFunction(fn, { closures: [ 0 ] })`); a path form, declared with
-`runtimePathFunction(expr, path)`, sits under another. That is the whole of the type system:
-the spec is read off the function.
+A library function (`lib/index.ts`, keyed `name/arity`) is called the same way, with the syntax of
+its arguments and a `Render`, and returns the filter of the call. What an argument *is* is the
+function's decision, as it is in jq where `def has($k)` is sugar for a filter parameter bound with
+`as`: `values` evaluates arguments as `$` parameters, once per combination of their outputs;
+`render.generator` takes one as a filter to run itself, as `map` and `select` do; `render.path` takes
+one as a path expression, as `path` and `del` do; and a function may read a literal straight off the
+syntax — `test("^a")` compiles its pattern once, at instantiation, and never again. There are no
+annotations saying which parameters are which, because nothing decides that ahead of the function.
 
-### Fan-out
+The one thing a body cannot say is that it is also a path expression, since that is a second
+implementation: `runtimePathFunction(value, path)` declares both forms for `select`, `first`,
+`limit`, `getpath` and `empty`, which is what `del(.[] | select(.a))` runs. A function without a
+path form, reached in path mode, raises jq's "Invalid path expression" with its value.
 
-A node that must emit at more than one site — `a, b`, `if` with two branches, `try` with a handler —
-cannot inline its consumer at each site without duplicating it. `fanOut` renders the consumer once to
-measure it: a small consumer (a `yield`, an `array.push`) is simply repeated; a large one is hoisted
-into a generator IIFE that the sites `yield` into and the consumer reads in one loop. A comma of
-expressions gets a third form: one loop over a `switch`, which keeps the items lazy in order with no
-generator at all.
+### Environments
 
-### Errors and `try`
+Bindings live in an environment threaded through every filter: a linked list, innermost first, of
+values, closures and label tokens. A reference is resolved at instantiation to a distance along it,
+so the body of `. as $x | …` runs with `$x` one frame away. A definition is a closure over the
+environment it was evaluated in, pushed as a frame when the `def` is reached; a call pushes that
+frame (so the body may recurse) and then a frame per parameter — a value for `$name`, a closure over
+the caller's environment for a filter parameter — and calls with several value-argument outputs
+run once per combination, as jq's do. Whether a definition's call is a stream is read off its body;
+a self-call inside that body assumes a single value and the body is rendered again if that turns
+out wrong.
 
-Errors are JavaScript exceptions (`JqError`), which is what makes the CPS rendering pay off — there is
-no error channel to thread. The one subtlety is that `try` covers only its body, not whatever consumes
-its outputs, which in a CPS rendering sits textually inside the `try`. A single-valued body is rendered
-so that the consumer runs after the `try` statement; a stream body goes through `tryCatch`, a generator
-that catches around each `next()` and so cannot see the consumer's errors, since those happen between
-one `next()` and the following. `label`/`break` is an exception of its own class that `try` lets pass.
+Destructuring is indexing: `. as [$a, {b: $c}]` is rewritten to `$t[0] as $a | $t[1].b as $c`
+before rendering, and `?//` to a `try` that restores the input and moves to the next pattern. The
+binding forms the compiler keeps are, in the end, just `as` and a variable.
 
-### Functions
+### Errors and paths
 
-A `def` is inlined at each call site, with its filter parameters bound to the argument syntax in the
-caller's scope — a closure in the compile-time sense, evaluated each time it is referenced, which is
-jq's semantics for a non-`$` parameter. Only a definition that refers to itself (directly, or through a
-definition nested in its body) becomes a JavaScript function, declared where the `def` is so that it
-closes over the surrounding variables. A recursive function is rendered once per mode it is used in —
-value, or path — and only for the modes that were requested, which is why declarations are emitted
-after whatever follows the definition has been rendered.
+Errors are exceptions (`JqError`). `try` catches around the body's iteration only: the consumer
+runs outside that frame, so its errors pass through untouched. `label`/`break` is an exception of
+its own class that `try` lets pass.
 
-### The compiled program
-
-The output is a factory, `(rt, lib, ctx) => filter`, over a runtime, a library and a context. The
-factory's prologue resolves everything the body will need, once: a runtime function specialised to
-what is known statically (`const _1 = rt.field("a")`, `rt.compare(">")`, `rt.format("base64")`), a
-library function bound to the context (`lib["map/1"].bind(ctx)`), a named argument
-(`rt.argument(ctx.args, "who")`, which fails at instantiation if it is missing), `ctx.env`. Two uses
-of the same expression share one name. The body refers only to those names — never to `rt`, `lib` or
-`ctx` — and library functions are called with the context as `this`, which is how `input` and `debug`
-reach it. The same rule extends to what the program itself defines: a filter argument that refers to
-nothing bound in the body — `select(.a > 1)`, `map(.b)`, `sort_by(-.n)` — is a constant, so its
-closure is made once in the prologue rather than at every evaluation, and a call whose arguments
-are all constants is applied once (`rt.apply(lib["select/1"], ctx, _7)`), leaving a plain filter of
-the input in the body. A closure over a variable bound in the body (`.[] as $x | map(. + $x)`) is
-made where it is used. The runtime (`lib/runtime.ts`) is therefore an object of small factories, and `compile`
-takes a `runtime` option: one that skips jq's checks for speed, or that traces or counts, is another
-object of the same shape.
-
-There is no prelude: nothing is defined in jq and parsed at startup, and nothing is indexed either. A
-call that no `def` in scope binds is looked up by `name/arity` in the library — an object of
-JavaScript functions, `lib/index.ts` by default or whatever `compile` was given as its `lib` option,
-so an application can carry a standard library of its own. The compiler knows no function by name:
-`select`, `first`, `range`, `path`, `empty`, `input` are library functions like `length` is. A filter
-argument reaches a library function as a closure carrying both of its forms — call it for values,
-`.path(path, value)` for `[path, value]` pairs — and a function that means something as a path
-expression (`select`, `first`, `limit`, `getpath`, `empty`) supplies that form through
-`runtimePathFunction`, which is what `del(.[] | select(.a))` runs. Recursive streams — `recurse`, `repeat`,
-`until`, `while` — are written as steps that yield outputs or further steps, and `unroll` runs them
-on an explicit stack, so they go as deep as the data does without touching the call stack.
-
-A recursive function whose shape is single is a plain function with `return`, and a self-call that is
-its last act — a call rendered against the function's own `return` emit — is rendered as a rebinding of
-the parameters and a `continue`, so that a filter may recurse as deeply as it likes. jq programs use
-recursion where other languages use loops.
-
-### Paths
-
-`|=`, `=`, `path(f)`, `del`, `paths`, `to_entries` and their kin need the left side as paths rather than
-values. The same syntax tree is rendered a second way for that: `path(node, path, value, scope, emit)`
-emits `[path, value]` pairs, and each construct that is path-transparent in jq — indexing, iteration,
-`|`, `,`, `if`, `//`, `try`, `as`, `first`, `limit`, `getpath`, `select` via `if`, `recurse` — has a
-path rendering. Anything else evaluates its value and raises jq's "Invalid path expression" with it.
-Updates go through an `Editor` that copies each container the first time a path passes through it and
-writes in place thereafter, so `.[] |= f` over an array is linear rather than quadratic.
+`|=`, `=`, `path(f)`, `del` and their kin need the left side as paths rather than values, so every
+construct that is path-transparent in jq has a second form, `path`, yielding `[path, value]` pairs
+for a path and the value at it; the runtime supplies it for indexing, iteration, `|`, `,`, `if`,
+`//`, `try`, `..`, and the library for `select` and the rest. Updates go through an `Editor` that
+copies each container the first time a path passes through it and writes in place thereafter, so
+`.[] |= f` over an array is linear.
 
 ### Files
 
 - `parser.ts`, `ast.ts` — scannerless recursive descent to a plain syntax tree, with jq's precedence.
-- `compiler.ts` — shape analysis and both renderings.
+- `compiler.ts` — instantiation: environments, definitions, calls, binding forms, and the dispatch
+  of everything else to the runtime.
+- `lib/filter.ts` — the contract: `Filter`, `Env`, `Render`, `Context`, `LibFunction`, and the
+  combinators (`values`, `combine`) a runtime or library is written with.
+- `lib/runtime.ts` — the default runtime: a handler per kind of node, jq's semantics.
+- `lib/index.ts` — the default library, keyed `name/arity`.
+- `lib/intrinsics.ts` — the operations on values: indexing, arithmetic, paths, the `Editor`, formats.
 - `lib/value.ts` — the value model: plain JSON values, comparison, equality, JSON conversion.
-- `lib/intrinsics.ts` — what rendered code calls directly: field access, indexing, iteration, the
-  operators, paths, the `Editor`, `@format`s.
-- `lib/index.ts` — the default library: an object of JavaScript functions keyed `name/arity`.
-- `index.ts` — `compile`, `render`, `run`, `parse`; `cli.ts` — the `jssq` binary.
+- `index.ts` — `compile`, `run`, `parse`; `cli.ts` — the `jssq` binary.
 - `jssq.test.ts` — the differential suite against the `jq` binary.
