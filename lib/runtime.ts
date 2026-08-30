@@ -57,6 +57,9 @@ export interface Runtime {
 	readonly isBreak: () => (error: unknown, label: object) => boolean;
 	/** A library function as a path expression */
 	readonly pathCall: (fn: LibFunction, ctx: Context) => (path: Path, value: Value, ...args: unknown[]) => Iterable<[ Path, Value ]>;
+	/** A library function applied to constant arguments, once: the filter of an input that results, in each mode */
+	readonly apply: (fn: LibFunction, ctx: Context, ...args: unknown[]) => (input: Value) => Value | Iterable<Value>;
+	readonly applyPath: (fn: LibFunction, ctx: Context, ...args: unknown[]) => (path: Path, value: Value) => Iterable<[ Path, Value ]>;
 	/** A named argument, `$name` */
 	readonly argument: (args: Readonly<Record<string, Value>>, name: string) => Value;
 }
@@ -109,5 +112,7 @@ export const runtime: Runtime = {
 	},
 	isBreak: () => (error, label) => error instanceof Break && error.label === label,
 	pathCall: (fn, ctx) => (path, value, ...args) => intrinsics.pathCall(fn, ctx, path, value, ...args),
+	apply: (fn, ctx, ...args) => input => fn.call(ctx, input, ...args),
+	applyPath: (fn, ctx, ...args) => (path, value) => intrinsics.pathCall(fn, ctx, path, value, ...args),
 	argument: intrinsics.argument,
 };

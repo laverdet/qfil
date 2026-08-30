@@ -3,7 +3,7 @@
  * outputs must agree as JSON values. A case where both raise an error passes without comparing
  * the messages. `divergent` holds the cases where this implementation is meant to differ.
  */
-import type { Value } from './index.js';
+import type { StreamFilter, Value } from './index.js';
 import * as assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import * as path from 'node:path';
@@ -572,6 +572,21 @@ void describe('compiled shape', () => {
 		assert.deepEqual(run('double, twice(. + 1), length', 2, { lib: custom }), [ 4, 3, 3, 2 ]);
 		assert.throws(() => compile('double', { lib: {} }), { message: 'double/0 is not defined at line 1, column 1' });
 		assert.throws(() => compile('length', { lib: {} }), { message: /length\/0 is not defined/ });
+	});
+	void it('makes constant closures and applications once, in the prologue', () => {
+		const body = (source: string) => compile(source).code.split('\nreturn function')[1]!.slice(1);
+		const source = '[.[] | select(.a > 1) | .b] | map(.) | first(.[]) | test("^x")';
+		const constant = compile(source);
+		assert.match(constant.code, /rt\.apply\(lib\["select\/1"\], ctx, _\d+\)/);
+		assert.match(constant.code, /rt\.apply\(lib\["test\/1"\], ctx, "\^x"\)/);
+		assert.ok(!body(source).includes('function'));
+		assert.deepEqual([ ...(constant as StreamFilter)([ { a: 2, b: 'x' }, { a: 0, b: 'y' } ]) ], [ true ]);
+		// A closure over a variable bound in the body is made where it is used
+		assert.ok(body('.[] as $x | map(. + $x)').includes('function'));
+		assert.ok(body('def f($n): map(. + $n); f(1)').includes('function'));
+		assert.deepEqual(run('.[] as $x | map(. + $x)', [ 1, 2 ]), [ [ 2, 3 ], [ 3, 4 ] ]);
+		// A closure through a filter parameter of an inlined definition is a constant when its argument is
+		assert.ok(!body('def g(f): map(f); g(. + 1)').includes('function'));
 	});
 	void it('binds named arguments', () => {
 		assert.deepEqual(run('$x + $y', null, { args: { x: 1, y: 2 } }), [ 3 ]);

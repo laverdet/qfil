@@ -951,8 +951,12 @@ class Compiler {
 		switch (binding.kind) {
 			case 'closure':
 				return this.expr(binding.node, input, binding.scope);
-			case 'builtin':
-				return `${this.libThunk(binding)}(${[ input, ...this.callArgs(binding, node, scope, arg => this.expr(arg, input, scope)) ].join(', ')})`;
+			case 'builtin': {
+				const applied = this.staticApplication(binding, node, scope, 'value');
+				return applied === undefined
+					? `${this.libThunk(binding)}(${[ input, ...this.callArgs(binding, node, scope, arg => this.expr(arg, input, scope)) ].join(', ')})`
+					: `${applied}(${input})`;
+			}
 			case 'jq':
 				if (binding.recursive) {
 					const args = this.callArgs(binding, node, scope, arg => this.expr(arg, input, scope));
@@ -971,9 +975,72 @@ class Compiler {
 
 	/** A call's arguments: values rendered by `value`, and filters as closures carrying both modes. */
 	private callArgs(binding: BuiltinBinding | JqFunction, node: ast.Call, scope: Scope, value: (arg: ast.Node) => string): string[] {
-		return node.args.map((arg, ii) => isClosureParam(binding, ii)
-			? `${this.thunk('rt.closure()')}(${this.valueClosure(arg, scope)}, ${this.pathClosure(arg, scope)})`
-			: value(arg));
+		return node.args.map((arg, ii) => isClosureParam(binding, ii) ? this.closureArg(arg, scope) : value(arg));
+	}
+
+	/** A filter argument as a closure. A constant one — referring to nothing bound in the body — is made once, in the prologue. */
+	private closureArg(arg: ast.Node, scope: Scope): string {
+		const closure = `${this.thunk('rt.closure()')}(${this.valueClosure(arg, scope)}, ${this.pathClosure(arg, scope)})`;
+		return this.captures(arg, scope) ? closure : this.thunk(closure);
+	}
+
+	/**
+	 * A library call whose arguments are all constants — literals, and closures that capture
+	 * nothing — is applied once, in the prologue; this is the name of the filter that results, or
+	 * nothing when an argument varies.
+	 */
+	private staticApplication(binding: BuiltinBinding, node: ast.Call, scope: Scope, mode: Mode): string | undefined {
+		const constant = node.args.every((arg, ii) => isClosureParam(binding, ii) ? !this.captures(arg, scope) : arg.type === 'literal');
+		if (!constant) {
+			return undefined;
+		}
+		const args = this.callArgs(binding, node, scope, arg => literal((arg as ast.Literal).value));
+		return this.thunk(`rt.${mode === 'path' ? 'applyPath' : 'apply'}(${[ `lib[${JSON.stringify(binding.key)}]`, 'ctx', ...args ].join(', ')})`);
+	}
+
+	/**
+	 * Whether a filter argument refers to anything bound in the program body — a variable, a
+	 * parameter, a function declared there, a label — rather than only to its own input and to
+	 * constants. One that does not is itself a constant. Constructs that bind names count as
+	 * capturing, conservatively; a free variable is an argument, and a constant.
+	 */
+	private captures(node: ast.Node, scope: Scope): boolean {
+		const any = (...children: (ast.Node | null)[]) => children.some(child => child !== null && this.captures(child, scope));
+		switch (node.type) {
+			case 'identity': case 'recurse': case 'literal': case 'format': case 'loc':
+				return false;
+			case 'variable':
+				return node.name !== 'ENV' && scope.variable(node.name) !== undefined;
+			case 'string':
+				return node.parts.some(part => typeof part !== 'string' && this.captures(part, scope));
+			case 'index': return any(node.target, node.key);
+			case 'slice': return any(node.target, node.from, node.to);
+			case 'iterate': return any(node.target);
+			case 'try': return any(node.body, node.handler);
+			case 'pipe': case 'comma': case 'binary': case 'and': case 'or': case 'alternative': case 'assign':
+				return any(node.left, node.right);
+			case 'negate': return any(node.operand);
+			case 'if': return any(node.condition, node.then, node.else);
+			case 'array': return any(node.body);
+			case 'object': return node.entries.some(entry => any(entry.key, entry.value));
+			case 'reduce': case 'foreach': case 'bind': case 'def': case 'label': case 'break':
+				return true;
+			case 'call': {
+				const binding = this.lookupFunction(node, scope);
+				switch (binding.kind) {
+					case 'param':
+						return true;
+					case 'closure':
+						return this.captures(binding.node, binding.scope);
+					case 'builtin':
+						return node.args.some(arg => this.captures(arg, scope));
+					case 'jq':
+						return binding.recursive
+							|| binding.def.params.some(param => param.value)
+							|| this.captures(binding.def.body, this.callScope(binding, node, scope, []));
+				}
+			}
+		}
 	}
 
 	private valueClosure(node: ast.Node, scope: Scope): string {
@@ -1206,17 +1273,24 @@ class Compiler {
 				const value = this.temp();
 				return `for (const ${value} of ${binding.js}(${input})) {\n${emit(value)}\n}`;
 			}
-			case 'builtin':
-				return this.valueArgs(this.valueParams(binding, node), input, scope, values => {
-					let next = 0;
-					const args = this.callArgs(binding, node, scope, () => values[next++]!);
-					const call = `${this.libThunk(binding)}(${[ input, ...args ].join(', ')})`;
+			case 'builtin': {
+				const invoke = (call: string) => {
 					if (binding.stream) {
 						const value = this.temp();
 						return `for (const ${value} of ${call}) {\n${emit(value)}\n}`;
 					}
 					return emit(call);
+				};
+				const applied = this.staticApplication(binding, node, scope, 'value');
+				if (applied !== undefined) {
+					return invoke(`${applied}(${input})`);
+				}
+				return this.valueArgs(this.valueParams(binding, node), input, scope, values => {
+					let next = 0;
+					const args = this.callArgs(binding, node, scope, () => values[next++]!);
+					return invoke(`${this.libThunk(binding)}(${[ input, ...args ].join(', ')})`);
 				});
+			}
 			case 'jq':
 				return this.valueArgs(this.valueParams(binding, node), input, scope, values => {
 					if (!binding.recursive) {
@@ -1342,13 +1416,18 @@ class Compiler {
 				const pair = this.temp();
 				return `for (const ${pair} of ${binding.js}.path(${path}, ${value})) {\n${emit(`${pair}[0]`, `${pair}[1]`)}\n}`;
 			}
-			case 'builtin':
+			case 'builtin': {
+				const pair = this.temp();
+				const applied = this.staticApplication(binding, node, scope, 'path');
+				if (applied !== undefined) {
+					return `for (const ${pair} of ${applied}(${path}, ${value})) {\n${emit(`${pair}[0]`, `${pair}[1]`)}\n}`;
+				}
 				return this.valueArgs(this.valueParams(binding, node), value, scope, values => {
 					let next = 0;
 					const args = this.callArgs(binding, node, scope, () => values[next++]!);
-					const pair = this.temp();
 					return `for (const ${pair} of ${this.thunk(`rt.pathCall(lib[${JSON.stringify(binding.key)}], ctx)`)}(${[ path, value, ...args ].join(', ')})) {\n${emit(`${pair}[0]`, `${pair}[1]`)}\n}`;
 				});
+			}
 			case 'jq':
 				return this.valueArgs(this.valueParams(binding, node), value, scope, values => {
 					if (!binding.recursive) {

@@ -111,7 +111,12 @@ library function bound to the context (`lib["map/1"].bind(ctx)`), a named argume
 (`rt.argument(ctx.args, "who")`, which fails at instantiation if it is missing), `ctx.env`. Two uses
 of the same expression share one name. The body refers only to those names — never to `rt`, `lib` or
 `ctx` — and library functions are called with the context as `this`, which is how `input` and `debug`
-reach it. The runtime (`lib/runtime.ts`) is therefore an object of small factories, and `compile`
+reach it. The same rule extends to what the program itself defines: a filter argument that refers to
+nothing bound in the body — `select(.a > 1)`, `map(.b)`, `sort_by(-.n)` — is a constant, so its
+closure is made once in the prologue rather than at every evaluation, and a call whose arguments
+are all constants is applied once (`rt.apply(lib["select/1"], ctx, _7)`), leaving a plain filter of
+the input in the body. A closure over a variable bound in the body (`.[] as $x | map(. + $x)`) is
+made where it is used. The runtime (`lib/runtime.ts`) is therefore an object of small factories, and `compile`
 takes a `runtime` option: one that skips jq's checks for speed, or that traces or counts, is another
 object of the same shape.
 
