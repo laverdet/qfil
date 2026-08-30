@@ -13,12 +13,11 @@
  *
  * `compile` takes a `lib` option, so an application may supply a library of its own.
  */
-import type * as ast from '../ast.js';
-import type { Context, Env, Filter, Lib, LibFunction, PathFilter, Render, Stream } from './filter.js';
-import type { Value, ValueObject } from './value.js';
-import { constant, overload, runtimePathFunction, streams, values } from './filter.js';
+import type * as ast from '#/compiler/ast.js';
+import type { Context, Env, Filter, Lib, LibFunction, PathFilter, Render, Stream, Value, ValueObject } from '#/compiler/filter.js';
 import { add, delpaths, field, getpath, halt, has, iterate, keys, length, recursePaths, setpath, split } from './intrinsics.js';
 import { JqError, compare, describe, fromjson, isObject, newObject, tojson, tonumber, tostring, truthy, typeOf } from './value.js';
+import { constant, overload, runtimePathFunction, streams, values } from '#/compiler/filter.js';
 
 function assertString(value: Value, what: string): string {
 	if (typeof value !== 'string') {

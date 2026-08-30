@@ -1,13 +1,9 @@
 /**
- * The values a filter reads and writes are plain JSON as JavaScript already holds it: `null`,
- * booleans, numbers, strings, arrays and objects. Nothing here mutates a value it was given; a
- * result that differs from its input is a new value sharing whatever it can.
+ * What a value is to this runtime: jq's ordering, equality and JSON conversions over the plain
+ * JSON values the contract declares. Nothing here mutates a value it was given; a result that
+ * differs from its input is a new value sharing whatever it can.
  */
-export type Value = null | boolean | number | string | Value[] | ValueObject;
-
-export interface ValueObject {
-	[key: string]: Value;
-}
+import type { Value, ValueObject } from '#/compiler/filter.js';
 
 export type ValueType = 'null' | 'boolean' | 'number' | 'string' | 'array' | 'object';
 
@@ -23,17 +19,6 @@ export class JqError extends Error {
 	constructor(value: Value) {
 		super(typeof value === 'string' ? value : `${tojson(value)} (not a string)`);
 		this.value = value;
-	}
-}
-
-/** Thrown by `break $label`, and caught by the `label` that bound it. Not a jq error; `try` lets it pass. */
-export class Break extends Error {
-	override name = 'Break';
-	readonly label: object;
-
-	constructor(label: object) {
-		super('break');
-		this.label = label;
 	}
 }
 

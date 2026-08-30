@@ -12,12 +12,8 @@
  * environment it was evaluated in, so it may refer to itself and to what enclosed it.
  */
 import type * as ast from './ast.js';
-import type { Context, Env, Filter, Lib, LibFunction, PathFilter, Render, Single, Stream } from './lib/filter.js';
-import type { Handled, Handler, Runtime } from './lib/runtime.js';
-import type { Value } from './lib/value.js';
-import { CompileError, allSingle, generator, invalid, isStream, lookup, pathCall, product, push } from './lib/filter.js';
-import { invalidPath } from './lib/intrinsics.js';
-import { Break } from './lib/value.js';
+import type { Context, Env, Filter, Handled, Handler, Lib, LibFunction, PathFilter, Render, Runtime, Single, Stream, Value } from './filter.js';
+import { Break, CompileError, allSingle, generator, isStream, lookup, pathCall, product, push } from './filter.js';
 
 /** A definition: the filters of its body, called with its own frame and its parameters pushed on the environment it closed over. */
 interface Definition {
@@ -285,11 +281,11 @@ class Compiler {
 			case 'foreach':
 				return this.pathForeach(node, scope);
 			case 'variable': case 'break':
-				return invalid(this.value(node, scope));
+				return this.invalid(this.value(node, scope));
 			case 'identity': case 'recurse': case 'literal': case 'string': case 'format': case 'index': case 'slice': case 'iterate': case 'try':
 			case 'pipe': case 'comma': case 'binary': case 'and': case 'or': case 'alternative': case 'negate': case 'assign': case 'if': case 'loc': case 'array': case 'object': {
 				const handler = this.handler(node);
-				return handler.path === undefined ? invalid(handler.value(node, this.renderer(scope))) : handler.path(node, this.renderer(scope));
+				return handler.path === undefined ? this.invalid(handler.value(node, this.renderer(scope))) : handler.path(node, this.renderer(scope));
 			}
 		}
 	}
@@ -306,6 +302,18 @@ class Compiler {
 			value: node => this.value(node, scope),
 			generator: node => this.generator(node, scope),
 			path: node => this.path(node, scope),
+			invalid: filter => this.invalid(filter),
+		};
+	}
+
+	/** A filter that is not a path expression, as a path filter: each value it yields is the runtime's invalid path. */
+	private invalid(filter: Filter): PathFilter {
+		const { invalidPath } = this.rt;
+		const stream = generator(filter);
+		return function*(_path, value, env) {
+			for (const output of stream(value, env)) {
+				yield invalidPath(output);
+			}
 		};
 	}
 
@@ -392,7 +400,7 @@ class Compiler {
 		const distance = scope.distance(binding.slot);
 		switch (binding.kind) {
 			case 'value':
-				return invalid(this.call(node, scope));
+				return this.invalid(this.call(node, scope));
 			case 'param':
 				return function*(path, value, env) {
 					const bound = lookup(env, distance) as BoundClosure;
@@ -668,6 +676,7 @@ class Compiler {
 		const inits = this.path(node.init, scope);
 		const sources = this.generator(node.source, scope);
 		const updates = this.path(node.update, inner);
+		const { invalidPath } = this.rt;
 		return function*(path, value, env) {
 			yield* reduce(inits(path, value, env), () => sources(value, env), env, ([ at, state ], bound) => updates(at, state, bound), () => invalidPath(null));
 		};

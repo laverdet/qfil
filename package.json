@@ -4,6 +4,9 @@
   "type": "module",
   "packageManager": "pnpm@11.20.0",
   "license": "ISC",
+  "imports": {
+    "#/*": "./dist/*"
+  },
   "exports": {
     ".": "./dist/index.js",
     "./*": "./dist/*"
@@ -28,6 +31,6 @@
     "typescript": "^6.0.3"
   },
   "bin": {
-    "jssq": "./dist/cli.js"
+    "jssq": "./dist/bin/jssq.js"
   }
 }

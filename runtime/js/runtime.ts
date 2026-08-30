@@ -5,23 +5,11 @@
  * else is here, which is what makes a runtime swappable: another object of this shape is another
  * meaning for the same syntax.
  */
-import type * as ast from '../ast.js';
-import type { Filter, PathFilter, Render } from './filter.js';
-import type { Path } from './intrinsics.js';
-import type { Value } from './value.js';
-import { CompileError, combine, combineStreams, generator, isStream } from './filter.js';
+import type * as ast from '#/compiler/ast.js';
+import type { Filter, Path, PathFilter, Render, Runtime, Value } from '#/compiler/filter.js';
+import { CompileError, combine, combineStreams, generator, isStream } from '#/compiler/filter.js';
 import * as intrinsics from './intrinsics.js';
 import { JqError, compare, equal, newObject, tostring, truthy } from './value.js';
-
-/** The node types the runtime gives meaning to; the rest bind names, and are the compiler's. */
-export type Handled = Exclude<ast.Node, ast.Variable | ast.Call | ast.Def | ast.Bind | ast.Reduce | ast.Foreach | ast.Label | ast.Break>;
-
-export interface Handler<Node extends ast.Node> {
-	readonly value: (node: Node, render: Render) => Filter;
-	readonly path?: (node: Node, render: Render) => PathFilter;
-}
-
-export type Runtime = { readonly [Type in Handled['type']]: Handler<Extract<ast.Node, { type: Type }>> };
 
 const binaries: Readonly<Record<ast.BinaryOperator, (left: Value, right: Value) => Value>> = {
 	'+': intrinsics.add,
@@ -67,6 +55,7 @@ function formatter(name: string): (value: Value) => string {
 
 /** jq's semantics. */
 export const runtime: Runtime = {
+	invalidPath: intrinsics.invalidPath,
 	identity: {
 		value: () => input => input,
 		path: () => function*(path, value) {

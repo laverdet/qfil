@@ -65,7 +65,7 @@ each piece be built once and reused for every input.
 Nothing is turned into source text. A program is *instantiated*: the compiler walks the syntax tree
 and asks, for each node, for the function that gives it meaning. It keeps only what binds names for
 itself — variables, definitions and their parameters, `as`, `reduce`, `foreach`, `label` — and hands
-every other construct, as syntax, to the runtime's handler for it. A handler (`lib/runtime.ts`)
+every other construct, as syntax, to the runtime's handler for it. A handler (`runtime/js/runtime.ts`)
 receives the node and a `Render`, asks back for whatever it needs of the node's children — as a
 value, as a stream, as a path — and returns the filter. The runtime is therefore the semantics of
 the language, one handler per kind of node, and another object of the same shape is another meaning
@@ -73,7 +73,7 @@ for the same syntax.
 
 ### Library functions receive syntax
 
-A library function (`lib/index.ts`, keyed by name) is called the same way, with a `Render` and the
+A library function (`runtime/js/index.ts`, keyed by name) is called the same way, with a `Render` and the
 syntax of its arguments, and returns the filter of the call. Its parameters are `render` and then one
 per argument, so a call is checked against its `length`; one name serves every arity, and `range`
 is an `overload` of three implementations, told apart by how many parameters each declares. What an argument *is* is the
@@ -122,14 +122,18 @@ copies each container the first time a path passes through it and writes in plac
 
 ### Files
 
-- `parser.ts`, `ast.ts` — scannerless recursive descent to a plain syntax tree, with jq's precedence.
-- `compiler.ts` — instantiation: environments, definitions, calls, binding forms, and the dispatch
-  of everything else to the runtime.
-- `lib/filter.ts` — the contract: `Filter`, `Env`, `Render`, `Context`, `LibFunction`, and the
-  combinators (`values`, `combine`) a runtime or library is written with.
-- `lib/runtime.ts` — the default runtime: a handler per kind of node, jq's semantics.
-- `lib/index.ts` — the default library, keyed by name.
-- `lib/intrinsics.ts` — the operations on values: indexing, arithmetic, paths, the `Editor`, formats.
-- `lib/value.ts` — the value model: plain JSON values, comparison, equality, JSON conversion.
-- `index.ts` — `compile`, `run`, `parse`; `cli.ts` — the `jssq` binary.
+- `compiler/parser.ts`, `compiler/ast.ts` — scannerless recursive descent to a plain syntax tree,
+  with jq's precedence.
+- `compiler/compiler.ts` — instantiation: environments, definitions, calls, binding forms, and the
+  dispatch of everything else to the runtime.
+- `compiler/filter.ts` — the contract: `Value`, `Filter`, `Env`, `Render`, `Context`, `Runtime`,
+  `LibFunction`, and the combinators (`values`, `combine`) a runtime or library is written with.
+  Nothing under `compiler/` depends on a particular runtime.
+- `runtime/js/runtime.ts` — the default runtime: a handler per kind of node, jq's semantics in
+  JavaScript, and `invalidPath`, what a value is where a path expression was needed.
+- `runtime/js/index.ts` — the default library, keyed by name.
+- `runtime/js/intrinsics.ts` — the operations on values: indexing, arithmetic, paths, the
+  `Editor`, formats.
+- `runtime/js/value.ts` — comparison, equality and JSON conversion over the contract's values.
+- `index.ts` — `compile`, `run`, `parse`; `bin/jssq.ts` — the `jssq` binary.
 - `jssq.test.ts` — the differential suite against the `jq` binary.

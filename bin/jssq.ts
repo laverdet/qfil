@@ -2,14 +2,14 @@
 /**
  * `jssq` — jq at a shell prompt, compiled to JavaScript: `jssq [options] <filter> [file...]`.
  */
-import type { Value } from './lib/value.js';
+import type { Value } from 'jssq/compiler/filter.js';
 import * as fs from 'node:fs';
 import process from 'node:process';
 import * as util from 'node:util';
-import { CompileError } from './lib/filter.js';
-import { Halt, JqError, compareStrings, isObject, newObject, tojson } from './lib/value.js';
-import { ParseError } from './parser.js';
-import { compile } from './index.js';
+import { CompileError } from 'jssq/compiler/filter.js';
+import { ParseError } from 'jssq/compiler/parser.js';
+import { compile } from 'jssq/index.js';
+import { Halt, JqError, compareStrings, isObject, newObject, tojson } from 'jssq/runtime/js/value.js';
 
 const USAGE = `usage: jssq [options] <filter> [file...]
 

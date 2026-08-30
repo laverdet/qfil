@@ -10,10 +10,20 @@
  * its arguments and a `Render`, and asks for each argument in the form it wants — a value, a stream,
  * a path — or reads the syntax itself, as `test("^a")` does to compile its pattern once.
  */
-import type * as ast from '../ast.js';
-import type { Path } from './intrinsics.js';
-import type { Value } from './value.js';
-import { invalidPath } from './intrinsics.js';
+import type * as ast from './ast.js';
+
+/**
+ * The values a filter reads and writes: plain JSON as JavaScript already holds it — `null`,
+ * booleans, numbers, strings, arrays and objects.
+ */
+export type Value = null | boolean | number | string | Value[] | ValueObject;
+
+export interface ValueObject {
+	[key: string]: Value;
+}
+
+/** A path into a value: the keys and indices from the root, as `path(f)` yields them. */
+export type Path = Value[];
 
 /** Variables, labels and functions bound so far, innermost first; `null` is nothing bound. */
 export type Env = Frame | null;
@@ -50,6 +60,25 @@ export interface Render {
 	readonly generator: (node: ast.Node) => Stream;
 	/** The node as a path expression. */
 	readonly path: (node: ast.Node) => PathFilter;
+	/** A filter that is not a path expression, as a path filter: each of its values is the runtime's invalid path. */
+	readonly invalid: (filter: Filter) => PathFilter;
+}
+
+/** The node types a runtime handles: everything but what binds a name, which is the compiler's own. */
+export type Handled = Exclude<ast.Node, ast.Variable | ast.Call | ast.Def | ast.Bind | ast.Reduce | ast.Foreach | ast.Label | ast.Break>;
+
+/** A node's semantics: its value form, and its path form when it is a path expression. */
+export interface Handler<Node extends ast.Node> {
+	readonly value: (node: Node, render: Render) => Filter;
+	readonly path?: (node: Node, render: Render) => PathFilter;
+}
+
+type Handlers = { readonly [Type in Handled['type']]: Handler<Extract<ast.Node, { type: Type }>> };
+
+/** The semantics of the language: a handler per kind of node, and what becomes of a value where a path was needed. */
+export interface Runtime extends Handlers {
+	/** Raised where a path expression was needed and a value came out instead: `path(1)`, `del(. + 1)`. */
+	readonly invalidPath: (value: Value) => never;
 }
 
 /** What a program reaches at runtime besides its input. */
@@ -73,6 +102,17 @@ export class CompileError extends Error {
 	constructor(message: string, at?: number) {
 		super(message);
 		this.at = at;
+	}
+}
+
+/** Thrown by `break $label`, and caught by the `label` that bound it. Not an error of the program; a runtime's `try` lets it pass. */
+export class Break extends Error {
+	override name = 'Break';
+	readonly label: object;
+
+	constructor(label: object) {
+		super('break');
+		this.label = label;
 	}
 }
 
@@ -139,20 +179,10 @@ export function generator(filter: Filter): Stream {
 	};
 }
 
-/** A filter that is not a path expression, as a path filter: its values are the error's. */
-export function invalid(filter: Filter): PathFilter {
-	const stream = generator(filter);
-	return function*(_path, value, env) {
-		for (const output of stream(value, env)) {
-			yield invalidPath(output);
-		}
-	};
-}
-
 /** A library function called as a path expression; one without a path form is invalid there, as jq has it. */
 export function pathCall(fn: LibFunction, ctx: Context, render: Render, args: readonly ast.Node[]): PathFilter {
 	const impl = fn[pathForm];
-	return impl === undefined ? invalid(fn.call(ctx, render, ...args)) : impl.call(ctx, render, ...args);
+	return impl === undefined ? render.invalid(fn.call(ctx, render, ...args)) : impl.call(ctx, render, ...args);
 }
 
 /** Every combination of the streams' outputs, the first (or the last) varying slowest, as jq orders them. */

@@ -9,7 +9,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import * as path from 'node:path';
 import process from 'node:process';
 import { describe, it } from 'node:test';
-import { tojson } from './lib/value.js';
+import { tojson } from './runtime/js/value.js';
 import { compile, constant, lib, overload, run, values } from './index.js';
 
 type Case = readonly [ filter: string, input?: Value, inputs?: readonly Value[] ];
@@ -522,7 +522,7 @@ divergent('jq 1.8 quirks not followed', [
 
 void describe('cli', () => {
 	const cli = (args: readonly string[], input = '') => {
-		const result = spawnSync(process.execPath, [ path.join(import.meta.dirname, 'cli.js'), ...args ], { input, encoding: 'utf8' });
+		const result = spawnSync(process.execPath, [ path.join(import.meta.dirname, 'bin', 'jssq.js'), ...args ], { input, encoding: 'utf8' });
 		return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 	};
 	void it('runs a filter over each input', () => {

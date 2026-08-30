@@ -7,25 +7,20 @@
  * elements. The filter is not turned into source text; it is assembled from the functions the
  * runtime and the library return for each piece of its syntax.
  */
-import type { Context, Lib } from './lib/filter.js';
-import type { Runtime } from './lib/runtime.js';
-import type { Value } from './lib/value.js';
+import type { Context, Lib, Runtime, Value } from './compiler/filter.js';
 import * as process from 'node:process';
-import { instantiate } from './compiler.js';
-import { lib as defaultLib } from './lib/index.js';
-import { runtime as defaultRuntime } from './lib/runtime.js';
-import { JqError, tojson } from './lib/value.js';
-import { parse } from './parser.js';
+import { instantiate } from './compiler/compiler.js';
+import { parse } from './compiler/parser.js';
+import { lib as defaultLib } from './runtime/js/index.js';
+import { runtime as defaultRuntime } from './runtime/js/runtime.js';
+import { JqError, tojson } from './runtime/js/value.js';
 
-export type { Value, ValueObject } from './lib/value.js';
-export { ParseError, parse } from './parser.js';
-export { Break, Halt, JqError } from './lib/value.js';
-export type { Context, Env, Filter as LibFilter, Lib, LibFunction, PathFilter, Render, Stream } from './lib/filter.js';
-export type { Path } from './lib/intrinsics.js';
-export { CompileError, combine, combineStreams, constant, generator, isStream, overload, pathForm, runtimePathFunction, streams, values } from './lib/filter.js';
-export { lib } from './lib/index.js';
-export type { Handled, Handler, Runtime } from './lib/runtime.js';
-export { runtime } from './lib/runtime.js';
+export type { Context, Env, Filter as LibFilter, Handled, Handler, Lib, LibFunction, Path, PathFilter, Render, Runtime, Stream, Value, ValueObject } from './compiler/filter.js';
+export { Break, CompileError, combine, combineStreams, constant, generator, isStream, overload, pathForm, runtimePathFunction, streams, values } from './compiler/filter.js';
+export { ParseError, parse } from './compiler/parser.js';
+export { lib } from './runtime/js/index.js';
+export { runtime } from './runtime/js/runtime.js';
+export { Halt, JqError } from './runtime/js/value.js';
 
 export interface RunOptions {
 	/** The library of named functions; the default one unless given. */

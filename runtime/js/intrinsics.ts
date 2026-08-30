@@ -3,10 +3,10 @@
  * `@format`s. The runtime (`runtime.ts`) gives the language's constructs their meaning in terms of
  * these; the library (`index.ts`) is built on them too. Nothing here knows about syntax.
  */
-import type { Value, ValueObject } from './value.js';
+import type { Path, Value, ValueObject } from '#/compiler/filter.js';
 import { Halt, JqError, compare, copyObject, describe, equal, isObject, newObject, tojson, tostring, typeOf } from './value.js';
 
-export { Break, Halt, JqError, compare, equal, fromjson, tojson, tonumber, tostring, truthy, typeOf } from './value.js';
+export { Halt, JqError, compare, equal, fromjson, tojson, tonumber, tostring, truthy, typeOf } from './value.js';
 
 export function error(value: Value): never {
 	throw new JqError(value);
@@ -458,8 +458,6 @@ export function *tryCatch<Type>(body: Iterable<Type>, handler: ((error: Value) =
 		yield next.value;
 	}
 }
-
-export type Path = Value[];
 
 export function invalidPath(value: Value): never {
 	throw new JqError(`Invalid path expression with result ${tojson(value)}`);
