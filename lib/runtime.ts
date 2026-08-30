@@ -9,7 +9,7 @@ import type * as ast from '../ast.js';
 import type { Filter, PathFilter, Render } from './filter.js';
 import type { Path } from './intrinsics.js';
 import type { Value } from './value.js';
-import { combine, combineStreams, generator, isStream } from './filter.js';
+import { CompileError, combine, combineStreams, generator, isStream } from './filter.js';
 import * as intrinsics from './intrinsics.js';
 import { JqError, compare, equal, newObject, tostring, truthy } from './value.js';
 
@@ -60,7 +60,7 @@ function pathThrough(render: Render, target: ast.Node, key: ast.Node, read: (val
 
 function formatter(name: string): (value: Value) => string {
 	if (!intrinsics.isFormat(name)) {
-		throw new JqError(`${name} is not a valid format`);
+		throw new CompileError(`${name} is not a valid format`);
 	}
 	return value => intrinsics.format(name, value);
 }

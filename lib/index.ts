@@ -1,9 +1,10 @@
 /**
- * The default library: named functions keyed by `name/arity`. Each receives the syntax of its
- * arguments and a `Render`, with the run's context as `this`, and returns the filter of a call:
- * a function of an input and an environment, a generator function when it yields a stream. That
- * is the whole of a declaration. A function that is also a path expression — `select`, `first`,
- * `getpath` — is declared with `runtimePathFunction(value, path)`.
+ * The default library: named functions. Each receives a `Render` and the syntax of its arguments,
+ * with the run's context as `this`, and returns the filter of a call: a function of an input and
+ * an environment, a generator function when it yields a stream. That is the whole of a declaration.
+ * A name that takes several numbers of arguments is an `overload` of one implementation per
+ * arity, told apart by their parameter counts; a function that is also a path expression —
+ * `select`, `first`, `getpath` — is declared with `runtimePathFunction(value, path)`.
  *
  * An argument is whatever the function makes of it: `values` evaluates arguments as jq's `$`
  * parameters (once per combination of their outputs); `render.generator` takes one as a filter to
@@ -13,9 +14,9 @@
  * `compile` takes a `lib` option, so an application may supply a library of its own.
  */
 import type * as ast from '../ast.js';
-import type { Context, Env, Lib, LibFunction, Render, Stream } from './filter.js';
+import type { Context, Env, Filter, Lib, LibFunction, PathFilter, Render, Stream } from './filter.js';
 import type { Value, ValueObject } from './value.js';
-import { constant, runtimePathFunction, streams, values } from './filter.js';
+import { constant, overload, runtimePathFunction, streams, values } from './filter.js';
 import { add, delpaths, field, getpath, halt, has, iterate, keys, length, recursePaths, setpath, split } from './intrinsics.js';
 import { JqError, compare, describe, fromjson, isObject, newObject, tojson, tonumber, tostring, truthy, typeOf } from './value.js';
 
@@ -42,7 +43,7 @@ function assertNumber(value: Value, what: string): number {
 
 /** A library function of the input alone. */
 function unary(fn: (input: Value) => Value): LibFunction {
-	return () => input => fn(input);
+	return _render => input => fn(input);
 }
 
 /** A stream drawn from outside the program, as `inputs` is. */
@@ -350,23 +351,27 @@ function *substitute(regex: RegExp, input: Value, replacement: (groups: Value) =
 	}
 }
 
-function regexFunction(flags: (args: readonly ast.Node[]) => ast.Node | null, extra: string, body: (regex: RegExp, input: Value) => Iterable<Value>): LibFunction {
-	return (args, render) => {
-		const regexes = regexOf(render, args[0]!, flags(args), extra);
-		return function*(input, env) {
-			yield* regexes(input, env, body);
-		};
+function regexFunction(extra: string, body: (regex: RegExp, input: Value) => Iterable<Value>): LibFunction {
+	const withRegex = (regexes: WithRegex): Stream => function*(input, env) {
+		yield* regexes(input, env, body);
 	};
+	return overload(
+		(render, pattern) => withRegex(regexOf(render, pattern, null, extra)),
+		(render, pattern, flags) => withRegex(regexOf(render, pattern, flags, extra)),
+	);
 }
 
-function subFunction(flags: (args: readonly ast.Node[]) => ast.Node | null, extra: string): LibFunction {
-	return (args, render) => {
-		const regexes = regexOf(render, args[0]!, flags(args), extra);
-		const replacement = render.generator(args[1]!);
+function subFunction(extra: string): LibFunction {
+	const withRegex = (render: Render, regexes: WithRegex, replacementNode: ast.Node): Stream => {
+		const replacement = render.generator(replacementNode);
 		return function*(input, env) {
 			yield* regexes(input, env, (compiled, text) => substitute(compiled, text, groups => replacement(groups, env)));
 		};
 	};
+	return overload(
+		(render, pattern, replacement) => withRegex(render, regexOf(render, pattern, null, extra), replacement),
+		(render, pattern, replacement, flags) => withRegex(render, regexOf(render, pattern, flags, extra), replacement),
+	);
 }
 
 function *testWith(compiled: RegExp, input: Value): Generator<Value> {
@@ -389,119 +394,107 @@ function *splitWith(compiled: RegExp, input: Value): Generator<Value> {
 	yield pieces;
 }
 
+/** A filter argument run over the input, as `map(f)` and `select(f)` take one. */
+function withFilter(build: (filter: Stream) => Filter): (render: Render, arg: ast.Node) => Filter {
+	return (render, arg) => build(render.generator(arg));
+}
+
+/** A filter argument as a path expression, as `path(f)` and `del(f)` take one. */
+function withPath(build: (paths: PathFilter) => Filter): (render: Render, arg: ast.Node) => Filter {
+	return (render, arg) => build(render.path(arg));
+}
+
 export const lib: Lib = {
-	'not/0': unary(input => !truthy(input)),
-	'error/0': unary(input => {
-		throw new JqError(input);
-	}),
-	'error/1': (args, render) => values(render, args, (_input, message) => {
-		throw new JqError(message);
-	}),
-	'length/0': () => length,
-	'type/0': () => typeOf,
-	'keys/0': () => keys,
-	'has/1': (args, render) => values(render, args, (input, key) => has(input, key)),
-	'add/0': unary(input => [ ...iterate(input) ].reduce(add, null)),
-	'tostring/0': () => tostring,
-	'tonumber/0': () => tonumber,
-	'tojson/0': unary(input => tojson(input)),
-	'fromjson/0': unary(input => fromjson(assertString(input, 'fromjson'))),
-	'getpath/1': runtimePathFunction(
-		(args, render) => values(render, args, (input, path) => getpath(input, path)),
-		(args, render) => {
-			const paths = render.generator(args[0]!);
-			return function*(path, value, env) {
+	not: unary(input => !truthy(input)),
+	error: overload(
+		unary(input => {
+			throw new JqError(input);
+		}),
+		(render, message) => values(render, [ message ], (_input, value) => {
+			throw new JqError(value);
+		}),
+	),
+	length: unary(length),
+	type: unary(typeOf),
+	keys: unary(keys),
+	has: (render, key) => values(render, [ key ], (input, value) => has(input, value)),
+	add: unary(input => [ ...iterate(input) ].reduce(add, null)),
+	tostring: unary(tostring),
+	tonumber: unary(tonumber),
+	tojson: unary(input => tojson(input)),
+	fromjson: unary(input => fromjson(assertString(input, 'fromjson'))),
+	getpath: runtimePathFunction(
+		(render, path) => values(render, [ path ], (input, value) => getpath(input, value)),
+		(render, path) => {
+			const paths = render.generator(path);
+			return function*(prefix, value, env) {
 				for (const sub of paths(value, env)) {
 					const found = getpath(value, sub);
-					yield [ [ ...path, ...sub as Value[] ], found ];
+					yield [ [ ...prefix, ...sub as Value[] ], found ];
 				}
 			};
 		},
 	),
-	'setpath/2': (args, render) => values(render, args, (input, path, value) => setpath(input, path, value)),
-	'delpaths/1': (args, render) => values(render, args, (input, paths) => delpaths(input, paths)),
-	'paths/0': () => function*(input) {
+	setpath: (render, path, value) => values(render, [ path, value ], (input, at, replacement) => setpath(input, at, replacement)),
+	delpaths: (render, paths) => values(render, [ paths ], (input, value) => delpaths(input, value)),
+	paths: _render => function*(input) {
 		for (const [ path ] of recursePaths([], input)) {
 			if (path.length > 0) {
 				yield path;
 			}
 		}
 	},
-	'to_entries/0': () => toEntries,
-	'from_entries/0': () => fromEntries,
-	'with_entries/1': (args, render) => {
-		const filter = render.generator(args[0]!);
-		return (input, env) => fromEntries(mapOver(toEntries(input), entry => filter(entry, env)));
-	},
-	'map/1': (args, render) => {
-		const filter = render.generator(args[0]!);
-		return (input, env) => mapOver(iterate(input), value => filter(value, env));
-	},
-	'recurse/1': (args, render) => {
-		const update = render.generator(args[0]!);
+	to_entries: unary(toEntries),
+	from_entries: unary(fromEntries),
+	with_entries: withFilter(filter => (input, env) => fromEntries(mapOver(toEntries(input), entry => filter(entry, env)))),
+	map: withFilter(filter => (input, env) => mapOver(iterate(input), value => filter(value, env))),
+	recurse: withFilter(update => function*(input, env) {
+		yield* unroll(repeat(input, env, update));
+	}),
+	repeat: withFilter(update => function*(input, env) {
+		yield* unroll(repeat(input, env, update));
+	}),
+	until: (render, cond, update) => {
+		const test = render.generator(cond);
+		const step = render.generator(update);
 		return function*(input, env) {
-			yield* unroll(repeat(input, env, update));
+			yield* unroll(until(input, env, test, step));
 		};
 	},
-	'repeat/1': (args, render) => {
-		const update = render.generator(args[0]!);
+	while: (render, cond, update) => {
+		const test = render.generator(cond);
+		const step = render.generator(update);
 		return function*(input, env) {
-			yield* unroll(repeat(input, env, update));
+			yield* unroll(loop(input, env, test, step));
 		};
 	},
-	'until/2': (args, render) => {
-		const cond = render.generator(args[0]!);
-		const update = render.generator(args[1]!);
-		return function*(input, env) {
-			yield* unroll(until(input, env, cond, update));
-		};
-	},
-	'while/2': (args, render) => {
-		const cond = render.generator(args[0]!);
-		const update = render.generator(args[1]!);
-		return function*(input, env) {
-			yield* unroll(loop(input, env, cond, update));
-		};
-	},
-	'walk/1': (args, render) => {
-		const filter = render.generator(args[0]!);
-		return function*(input, env) {
-			yield* walk(input, env, filter);
-		};
-	},
-	'empty/0': runtimePathFunction(
-		() => function*() {
+	walk: withFilter(filter => function*(input, env) {
+		yield* walk(input, env, filter);
+	}),
+	empty: runtimePathFunction(
+		_render => function*() {
 			yield* [];
 		},
-		() => function*() {
+		_render => function*() {
 			yield* [];
 		},
 	),
-	'path/1': (args, render) => {
-		const paths = render.path(args[0]!);
-		return function*(input, env) {
-			for (const [ path ] of paths([], input, env)) {
-				yield path;
-			}
-		};
-	},
-	'del/1': (args, render) => {
-		const paths = render.path(args[0]!);
-		return (input, env) => delpaths(input, [ ...paths([], input, env) ].map(([ path ]) => path));
-	},
-	'select/1': runtimePathFunction(
-		(args, render) => {
-			const condition = render.generator(args[0]!);
-			return function*(input, env) {
-				for (const test of condition(input, env)) {
-					if (truthy(test)) {
-						yield input;
-					}
+	path: withPath(paths => function*(input, env) {
+		for (const [ path ] of paths([], input, env)) {
+			yield path;
+		}
+	}),
+	del: withPath(paths => (input, env) => delpaths(input, [ ...paths([], input, env) ].map(([ path ]) => path))),
+	select: runtimePathFunction(
+		withFilter(condition => function*(input, env) {
+			for (const test of condition(input, env)) {
+				if (truthy(test)) {
+					yield input;
 				}
-			};
-		},
-		(args, render) => {
-			const condition = render.generator(args[0]!);
+			}
+		}),
+		(render, arg) => {
+			const condition = render.generator(arg);
 			return function*(path, value, env) {
 				for (const test of condition(value, env)) {
 					if (truthy(test)) {
@@ -511,138 +504,133 @@ export const lib: Lib = {
 			};
 		},
 	),
-	'first/1': runtimePathFunction(
-		(args, render) => {
-			const filter = render.generator(args[0]!);
-			return function*(input, env) {
+	first: overload(
+		unary(input => assertArray(input, 'first')[0] ?? null),
+		runtimePathFunction(
+			withFilter(filter => function*(input, env) {
 				yield* head(filter(input, env));
-			};
-		},
-		(args, render) => {
-			const filter = render.path(args[0]!);
-			return function*(path, value, env) {
-				yield* head(filter(path, value, env));
-			};
-		},
+			}),
+			(render, arg) => {
+				const filter = render.path(arg);
+				return function*(path, value, env) {
+					yield* head(filter(path, value, env));
+				};
+			},
+		),
 	),
-	'limit/2': runtimePathFunction(
-		(args, render) => {
-			const counts = render.generator(args[0]!);
-			const filter = render.generator(args[1]!);
+	limit: runtimePathFunction(
+		(render, count, arg) => {
+			const counts = render.generator(count);
+			const filter = render.generator(arg);
 			return function*(input, env) {
-				for (const count of counts(input, env)) {
-					yield* limited(count, filter(input, env));
+				for (const bound of counts(input, env)) {
+					yield* limited(bound, filter(input, env));
 				}
 			};
 		},
-		(args, render) => {
-			const counts = render.generator(args[0]!);
-			const filter = render.path(args[1]!);
+		(render, count, arg) => {
+			const counts = render.generator(count);
+			const filter = render.path(arg);
 			return function*(path, value, env) {
-				for (const count of counts(value, env)) {
-					yield* limited(count, filter(path, value, env));
+				for (const bound of counts(value, env)) {
+					yield* limited(bound, filter(path, value, env));
 				}
 			};
 		},
 	),
-	'isempty/1': (args, render) => {
-		const filter = render.generator(args[0]!);
-		return (input, env) => filter(input, env)[Symbol.iterator]().next().done === true;
-	},
-	'range/1': (args, render) => streams(render, args, function*(_input, upto) {
-		const end = rangeBound(upto);
-		for (let ii = 0; ii < end; ++ii) {
-			yield ii;
-		}
-	}),
-	'range/2': (args, render) => streams(render, args, function*(_input, from, upto) {
-		const end = rangeBound(upto);
-		for (let ii = rangeBound(from); ii < end; ++ii) {
-			yield ii;
-		}
-	}),
-	'range/3': (args, render) => streams(render, args, function*(_input, from, upto, by) {
-		const step = rangeBound(by);
-		const end = rangeBound(upto);
-		if (step > 0) {
-			for (let ii = rangeBound(from); ii < end; ii += step) {
+	isempty: withFilter(filter => (input, env) => filter(input, env)[Symbol.iterator]().next().done === true),
+	range: overload(
+		(render, upto) => streams(render, [ upto ], function*(_input, end) {
+			const bound = rangeBound(end);
+			for (let ii = 0; ii < bound; ++ii) {
 				yield ii;
 			}
-		} else if (step < 0) {
-			for (let ii = rangeBound(from); ii > end; ii += step) {
+		}),
+		(render, from, upto) => streams(render, [ from, upto ], function*(_input, start, end) {
+			const bound = rangeBound(end);
+			for (let ii = rangeBound(start); ii < bound; ++ii) {
 				yield ii;
 			}
-		}
-	}),
-	'input/0'(this: Context) {
+		}),
+		(render, from, upto, by) => streams(render, [ from, upto, by ], function*(_input, start, end, step) {
+			const increment = rangeBound(step);
+			const bound = rangeBound(end);
+			if (increment > 0) {
+				for (let ii = rangeBound(start); ii < bound; ii += increment) {
+					yield ii;
+				}
+			} else if (increment < 0) {
+				for (let ii = rangeBound(start); ii > bound; ii += increment) {
+					yield ii;
+				}
+			}
+		}),
+	),
+	input(this: Context, _render: Render) {
 		return () => this.input();
 	},
-	'inputs/0'(this: Context) {
+	inputs(this: Context, _render: Render) {
 		return fromIterable(() => this.inputs());
 	},
-	'debug/0'(this: Context) {
+	debug(this: Context, _render: Render) {
 		return (input: Value) => {
 			this.debug(input);
 			return input;
 		};
 	},
-	'stderr/0'(this: Context) {
+	stderr(this: Context, _render: Render) {
 		return (input: Value) => {
 			this.stderr(input);
 			return input;
 		};
 	},
-	'any/0': unary(input => [ ...iterate(input) ].some(truthy)),
-	'all/0': unary(input => [ ...iterate(input) ].every(truthy)),
-	'first/0': unary(input => assertArray(input, 'first')[0] ?? null),
-	'last/0': unary(input => assertArray(input, 'last').at(-1) ?? null),
-	'sort/0': unary(input => [ ...assertArray(input, 'sort') ].sort(compare)),
-	'sort_by/1': (args, render) => {
-		const filter = render.generator(args[0]!);
-		return (input, env) => {
-			const items = assertArray(input, 'sort_by');
-			return order(items, keysBy(items, filter, env)).map(ii => items[ii]!);
-		};
-	},
-	'group_by/1': (args, render) => {
-		const filter = render.generator(args[0]!);
-		return (input, env) => {
-			const items = assertArray(input, 'group_by');
-			return groups(items, keysBy(items, filter, env));
-		};
-	},
-	'unique/0': unary(input => {
+	any: unary(input => [ ...iterate(input) ].some(truthy)),
+	all: unary(input => [ ...iterate(input) ].every(truthy)),
+	last: unary(input => assertArray(input, 'last').at(-1) ?? null),
+	sort: unary(input => [ ...assertArray(input, 'sort') ].sort(compare)),
+	sort_by: withFilter(filter => (input, env) => {
+		const items = assertArray(input, 'sort_by');
+		return order(items, keysBy(items, filter, env)).map(ii => items[ii]!);
+	}),
+	group_by: withFilter(filter => (input, env) => {
+		const items = assertArray(input, 'group_by');
+		return groups(items, keysBy(items, filter, env));
+	}),
+	unique: unary(input => {
 		const items = assertArray(input, 'unique');
 		return groups(items, items).map(group => group[0]!);
 	}),
-	'reverse/0': unary(input => input === null ? [] : [ ...assertArray(input, 'reverse') ].reverse()),
-	'flatten/0': unary(flatten),
-	'startswith/1': (args, render) => values(render, args, (input, prefix) => assertString(input, 'startswith').startsWith(assertString(prefix, 'startswith'))),
-	'endswith/1': (args, render) => values(render, args, (input, suffix) => assertString(input, 'endswith').endsWith(assertString(suffix, 'endswith'))),
-	'ltrimstr/1': (args, render) => values(render, args, (input, prefix) => {
+	reverse: unary(input => input === null ? [] : [ ...assertArray(input, 'reverse') ].reverse()),
+	flatten: unary(flatten),
+	startswith: (render, prefix) => values(render, [ prefix ], (input, value) => assertString(input, 'startswith').startsWith(assertString(value, 'startswith'))),
+	endswith: (render, suffix) => values(render, [ suffix ], (input, value) => assertString(input, 'endswith').endsWith(assertString(value, 'endswith'))),
+	ltrimstr: (render, prefix) => values(render, [ prefix ], (input, value) => {
 		const text = assertString(input, 'ltrimstr');
-		return typeof prefix === 'string' && text.startsWith(prefix) ? text.slice(prefix.length) : text;
+		return typeof value === 'string' && text.startsWith(value) ? text.slice(value.length) : text;
 	}),
-	'rtrimstr/1': (args, render) => values(render, args, (input, suffix) => {
+	rtrimstr: (render, suffix) => values(render, [ suffix ], (input, value) => {
 		const text = assertString(input, 'rtrimstr');
-		return typeof suffix === 'string' && suffix !== '' && text.endsWith(suffix) ? text.slice(0, -suffix.length) : text;
+		return typeof value === 'string' && value !== '' && text.endsWith(value) ? text.slice(0, -value.length) : text;
 	}),
-	'split/1': (args, render) => values(render, args, (input, separator) => split(assertString(input, 'split'), assertString(separator, 'split'))),
-	'split/2': regexFunction(args => args[1]!, 'g', splitWith),
-	'join/1': (args, render) => values(render, args, (input, separator) => join(input, separator)),
-	'ascii_downcase/0': unary(input => assertString(input, 'ascii_downcase').replace(/[A-Z]+/g, text => text.toLowerCase())),
-	'ascii_upcase/0': unary(input => assertString(input, 'ascii_upcase').replace(/[a-z]+/g, text => text.toUpperCase())),
-	'test/1': regexFunction(() => null, '', testWith),
-	'test/2': regexFunction(args => args[1]!, '', testWith),
-	'match/1': regexFunction(() => null, '', matchWith),
-	'match/2': regexFunction(args => args[1]!, '', matchWith),
-	'sub/2': subFunction(() => null, ''),
-	'sub/3': subFunction(args => args[2]!, ''),
-	'gsub/2': subFunction(() => null, 'g'),
-	'floor/0': unary(input => Math.floor(assertNumber(input, 'floor'))),
-	'sqrt/0': unary(input => Math.sqrt(assertNumber(input, 'sqrt'))),
-	'pow/2': (args, render) => values(render, args, (_input, base, exponent) => assertNumber(base, 'pow') ** assertNumber(exponent, 'pow')),
-	'halt/0': () => () => halt(0),
-	'halt_error/0': unary(input => halt(5, input)),
-	'halt_error/1': (args, render) => values(render, args, (input, code) => halt(assertNumber(code, 'halt_error'), input)),
+	split: overload(
+		(render, separator) => values(render, [ separator ], (input, value) => split(assertString(input, 'split'), assertString(value, 'split'))),
+		(render, pattern, flags) => function*(input, env) {
+			yield* regexOf(render, pattern, flags, 'g')(input, env, splitWith);
+		},
+	),
+	join: (render, separator) => values(render, [ separator ], (input, value) => join(input, value)),
+	ascii_downcase: unary(input => assertString(input, 'ascii_downcase').replace(/[A-Z]+/g, text => text.toLowerCase())),
+	ascii_upcase: unary(input => assertString(input, 'ascii_upcase').replace(/[a-z]+/g, text => text.toUpperCase())),
+	test: regexFunction('', testWith),
+	match: regexFunction('', matchWith),
+	sub: subFunction(''),
+	gsub: subFunction('g'),
+	floor: unary(input => Math.floor(assertNumber(input, 'floor'))),
+	sqrt: unary(input => Math.sqrt(assertNumber(input, 'sqrt'))),
+	pow: (render, base, exponent) => values(render, [ base, exponent ], (_input, left, right) => assertNumber(left, 'pow') ** assertNumber(right, 'pow')),
+	halt: _render => () => halt(0),
+	halt_error: overload(
+		unary(input => halt(5, input)),
+		(render, code) => values(render, [ code ], (input, status) => halt(assertNumber(status, 'halt_error'), input)),
+	),
 };

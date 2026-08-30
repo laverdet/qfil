@@ -67,8 +67,10 @@ for the same syntax.
 
 ### Library functions receive syntax
 
-A library function (`lib/index.ts`, keyed `name/arity`) is called the same way, with the syntax of
-its arguments and a `Render`, and returns the filter of the call. What an argument *is* is the
+A library function (`lib/index.ts`, keyed by name) is called the same way, with a `Render` and the
+syntax of its arguments, and returns the filter of the call. Its parameters are `render` and then one
+per argument, so a call is checked against its `length`; one name serves every arity, and `range`
+is an `overload` of three implementations, told apart by how many parameters each declares. What an argument *is* is the
 function's decision, as it is in jq where `def has($k)` is sugar for a filter parameter bound with
 `as`: `values` evaluates arguments as `$` parameters, once per combination of their outputs;
 `render.generator` takes one as a filter to run itself, as `map` and `select` do; `render.path` takes
@@ -118,7 +120,7 @@ copies each container the first time a path passes through it and writes in plac
 - `lib/filter.ts` — the contract: `Filter`, `Env`, `Render`, `Context`, `LibFunction`, and the
   combinators (`values`, `combine`) a runtime or library is written with.
 - `lib/runtime.ts` — the default runtime: a handler per kind of node, jq's semantics.
-- `lib/index.ts` — the default library, keyed `name/arity`.
+- `lib/index.ts` — the default library, keyed by name.
 - `lib/intrinsics.ts` — the operations on values: indexing, arithmetic, paths, the `Editor`, formats.
 - `lib/value.ts` — the value model: plain JSON values, comparison, equality, JSON conversion.
 - `index.ts` — `compile`, `run`, `parse`; `cli.ts` — the `jssq` binary.

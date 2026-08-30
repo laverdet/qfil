@@ -64,16 +64,31 @@ export interface Context {
 	readonly stderr: (value: Value) => void;
 }
 
+/** A program that cannot be instantiated: a name that is not defined, a format that does not exist. */
+export class CompileError extends Error {
+	override name = 'CompileError';
+	/** Where in the source, when known; the compiler adds it to an error a library function raised. */
+	readonly at: number | undefined;
+
+	constructor(message: string, at?: number) {
+		super(message);
+		this.at = at;
+	}
+}
+
 /** A library function's path form, when it has one: `select`, `first`, `getpath`. */
 export const pathForm: unique symbol = Symbol('jssq.path');
 
 /**
- * A library function, keyed `name/arity`: given the syntax of its arguments and a `Render`, and
- * called with the context as `this`, it returns the filter of a call to it.
+ * A library function, keyed by name: given a `Render` and the syntax of its arguments, and called
+ * with the context as `this`, it returns the filter of a call to it. Its parameters are `render`
+ * and then one per argument, so its `length` is its arity plus one, which is how a call is checked.
+ * One name serves every arity: an `overload` declares no parameters at all, takes any number, and
+ * picks an implementation by how many there are.
  */
 export interface LibFunction {
-	(this: Context, args: readonly ast.Node[], render: Render): Filter;
-	readonly [pathForm]?: (this: Context, args: readonly ast.Node[], render: Render) => PathFilter;
+	(this: Context, render: Render, ...args: readonly ast.Node[]): Filter;
+	readonly [pathForm]?: (this: Context, render: Render, ...args: readonly ast.Node[]) => PathFilter;
 }
 
 export type Lib = Readonly<Record<string, LibFunction>>;
@@ -81,6 +96,26 @@ export type Lib = Readonly<Record<string, LibFunction>>;
 /** A library function that is also a path expression: its value form, then its path form. */
 export function runtimePathFunction<Fn extends LibFunction>(value: Fn, path: NonNullable<LibFunction[typeof pathForm]>): Fn {
 	return Object.assign(value, { [pathForm]: path });
+}
+
+/**
+ * One library function of several arities: each alternative declares its arguments as parameters
+ * after `render`, and the one whose parameter count matches a call is the one used.
+ */
+export function overload(...alternatives: readonly LibFunction[]): LibFunction {
+	const pick = (args: readonly ast.Node[]): LibFunction => alternatives.find(alternative => alternative.length === args.length + 1) ?? function() {
+		throw new CompileError(`no definition takes ${args.length} argument${args.length === 1 ? '' : 's'}`);
+	}();
+	return runtimePathFunction(
+		function(this: Context, ...call: [ Render, ...ast.Node[] ]) {
+			const [ render, ...args ] = call;
+			return pick(args).call(this, render, ...args);
+		},
+		function(this: Context, ...call: [ Render, ...ast.Node[] ]) {
+			const [ render, ...args ] = call;
+			return pathCall(pick(args), this, render, args);
+		},
+	);
 }
 
 const GeneratorFunction = Object.getPrototypeOf(function*() {}) as { constructor: new () => unknown };
@@ -115,9 +150,9 @@ export function invalid(filter: Filter): PathFilter {
 }
 
 /** A library function called as a path expression; one without a path form is invalid there, as jq has it. */
-export function pathCall(fn: LibFunction, ctx: Context, args: readonly ast.Node[], render: Render): PathFilter {
+export function pathCall(fn: LibFunction, ctx: Context, render: Render, args: readonly ast.Node[]): PathFilter {
 	const impl = fn[pathForm];
-	return impl === undefined ? invalid(fn.call(ctx, args, render)) : impl.call(ctx, args, render);
+	return impl === undefined ? invalid(fn.call(ctx, render, ...args)) : impl.call(ctx, render, ...args);
 }
 
 /** Every combination of the streams' outputs, the first (or the last) varying slowest, as jq orders them. */

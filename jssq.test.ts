@@ -10,7 +10,7 @@ import * as path from 'node:path';
 import process from 'node:process';
 import { describe, it } from 'node:test';
 import { tojson } from './lib/value.js';
-import { compile, constant, lib, run, values } from './index.js';
+import { compile, constant, lib, overload, run, values } from './index.js';
 
 type Case = readonly [ filter: string, input?: Value, inputs?: readonly Value[] ];
 
@@ -555,21 +555,26 @@ void describe('compiled shape', () => {
 	void it('takes a library of its own', () => {
 		const custom: Lib = {
 			...lib,
-			'double/0': () => (input: Value) => (input as number) * 2,
-			'twice/1': (args, render) => {
-				const filter = render.generator(args[0]!);
+			double: () => (input: Value) => (input as number) * 2,
+			twice: (render, arg) => {
+				const filter = render.generator(arg);
 				return function*(input, env) {
 					yield* filter(input, env);
 					yield* filter(input, env);
 				};
 			},
 			// A function that reads its argument's syntax: a literal is folded at instantiation
-			'plus/1': (args, render) => {
-				const amount = constant(args[0]!);
-				return amount === undefined ? values(render, args, (input, added) => (input as number) + (added as number)) : (input: Value) => (input as number) + (amount as number);
-			},
+			plus: overload(
+				(render, arg) => {
+					const amount = constant(arg);
+					return amount === undefined ? values(render, [ arg ], (input, added) => (input as number) + (added as number)) : (input: Value) => (input as number) + (amount as number);
+				},
+				(render, left, right) => values(render, [ left, right ], (input, first, second) => (input as number) + (first as number) + (second as number)),
+			),
 		};
-		assert.deepEqual(run('double, twice(. + 1), length, plus(1), plus(. * 2)', 2, { lib: custom }), [ 4, 3, 3, 2, 3, 6 ]);
+		assert.deepEqual(run('double, twice(. + 1), length, plus(1), plus(. * 2), plus(1; 2)', 2, { lib: custom }), [ 4, 3, 3, 2, 3, 6, 5 ]);
+		assert.throws(() => compile('plus(1; 2; 3)', { lib: custom }), { message: 'plus/3: no definition takes 3 arguments at line 1, column 1' });
+		assert.throws(() => compile('1 | map(.; .)'), { message: 'map/2 is not defined at line 1, column 5' });
 		assert.throws(() => compile('double', { lib: {} }), { message: 'double/0 is not defined at line 1, column 1' });
 		assert.throws(() => compile('length', { lib: {} }), { message: /length\/0 is not defined/ });
 	});

@@ -6,7 +6,7 @@ import type { Value } from './lib/value.js';
 import * as fs from 'node:fs';
 import process from 'node:process';
 import * as util from 'node:util';
-import { CompileError } from './compiler.js';
+import { CompileError } from './lib/filter.js';
 import { Halt, JqError, compareStrings, isObject, newObject, tojson } from './lib/value.js';
 import { ParseError } from './parser.js';
 import { compile } from './index.js';

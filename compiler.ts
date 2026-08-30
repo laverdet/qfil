@@ -15,12 +15,8 @@ import type * as ast from './ast.js';
 import type { Context, Env, Filter, Lib, LibFunction, PathFilter, Render, Single, Stream } from './lib/filter.js';
 import type { Handled, Handler, Runtime } from './lib/runtime.js';
 import type { Value } from './lib/value.js';
-import { allSingle, generator, invalid, isStream, lookup, pathCall, product, push } from './lib/filter.js';
+import { CompileError, allSingle, generator, invalid, isStream, lookup, pathCall, product, push } from './lib/filter.js';
 import { Break } from './lib/value.js';
-
-export class CompileError extends Error {
-	override name = 'CompileError';
-}
 
 /** A definition: the filters of its body, called with its own frame and its parameters pushed on the environment it closed over. */
 interface Definition {
@@ -256,13 +252,10 @@ class Compiler {
 
 	// -- Names --
 
-	private error(message: string, at?: number): CompileError {
-		if (at === undefined) {
-			return new CompileError(message);
-		}
+	private error(message: string, at: number): CompileError {
 		const line = this.source.slice(0, at).split('\n').length;
 		const column = at - this.source.lastIndexOf('\n', at - 1);
-		return new CompileError(`${message} at line ${line}, column ${column}`);
+		return new CompileError(`${message} at line ${line}, column ${column}`, at);
 	}
 
 	/** A fresh variable name no program can spell, for desugaring. */
@@ -285,11 +278,30 @@ class Compiler {
 		return () => value;
 	}
 
+	/** A call's binding: a definition in scope, else a library function whose parameters fit the call. */
 	private lookupFunction(node: ast.Call, scope: Scope): FuncBinding | LibFunction {
 		const key = `${node.name}/${node.args.length}`;
-		return scope.func(key) ?? this.lib[key] ?? (() => {
+		const local = scope.func(key);
+		if (local !== undefined) {
+			return local;
+		}
+		const fn = this.lib[node.name];
+		if (fn === undefined || (fn.length !== 0 && fn.length !== node.args.length + 1)) {
 			throw this.error(`${key} is not defined`, node.at);
-		})();
+		}
+		return fn;
+	}
+
+	/** A library function applied to a call's syntax; a compile error it raises is placed at the call. */
+	private libCall<Result>(node: ast.Call, apply: () => Result): Result {
+		try {
+			return apply();
+		} catch (error) {
+			if (error instanceof CompileError && error.at === undefined) {
+				throw this.error(`${node.name}/${node.args.length}: ${error.message}`, node.at);
+			}
+			throw error;
+		}
 	}
 
 	// -- Calls --
@@ -297,7 +309,7 @@ class Compiler {
 	private call(node: ast.Call, scope: Scope): Filter {
 		const binding = this.lookupFunction(node, scope);
 		if (typeof binding === 'function') {
-			return binding.call(this.ctx, node.args, this.renderer(scope));
+			return this.libCall(node, () => binding.call(this.ctx, this.renderer(scope), ...node.args));
 		}
 		const distance = scope.distance(binding.slot);
 		switch (binding.kind) {
@@ -316,7 +328,7 @@ class Compiler {
 	private pathCall(node: ast.Call, scope: Scope): PathFilter {
 		const binding = this.lookupFunction(node, scope);
 		if (typeof binding === 'function') {
-			return pathCall(binding, this.ctx, node.args, this.renderer(scope));
+			return this.libCall(node, () => pathCall(binding, this.ctx, this.renderer(scope), node.args));
 		}
 		const distance = scope.distance(binding.slot);
 		switch (binding.kind) {

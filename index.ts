@@ -18,12 +18,11 @@ import { JqError, tojson } from './lib/value.js';
 import { parse } from './parser.js';
 
 export type { Value, ValueObject } from './lib/value.js';
-export { CompileError } from './compiler.js';
 export { ParseError, parse } from './parser.js';
 export { Break, Halt, JqError } from './lib/value.js';
 export type { Context, Env, Filter as LibFilter, Lib, LibFunction, PathFilter, Render, Stream } from './lib/filter.js';
 export type { Path } from './lib/intrinsics.js';
-export { combine, combineStreams, constant, generator, isStream, pathForm, runtimePathFunction, streams, values } from './lib/filter.js';
+export { CompileError, combine, combineStreams, constant, generator, isStream, overload, pathForm, runtimePathFunction, streams, values } from './lib/filter.js';
 export { lib } from './lib/index.js';
 export type { Handled, Handler, Runtime } from './lib/runtime.js';
 export { runtime } from './lib/runtime.js';
