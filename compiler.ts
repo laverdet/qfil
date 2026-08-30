@@ -16,6 +16,7 @@ import type { Context, Env, Filter, Lib, LibFunction, PathFilter, Render, Single
 import type { Handled, Handler, Runtime } from './lib/runtime.js';
 import type { Value } from './lib/value.js';
 import { CompileError, allSingle, generator, invalid, isStream, lookup, pathCall, product, push } from './lib/filter.js';
+import { invalidPath } from './lib/intrinsics.js';
 import { Break } from './lib/value.js';
 
 /** A definition: the filters of its body, called with its own frame and its parameters pushed on the environment it closed over. */
@@ -92,6 +93,13 @@ class Scope {
 		return new Scope(this, this.depth + 1);
 	}
 
+	/** A scope one frame deeper, the frame holding a variable. */
+	withVariable(name: string): Scope {
+		const inner = this.child();
+		inner.vars.set(name, this.depth);
+		return inner;
+	}
+
 	/** The distance from the innermost frame to a frame's slot, as seen from here. */
 	distance(slot: number): number {
 		return this.depth - 1 - slot;
@@ -122,6 +130,53 @@ function index(target: ast.Node, key: ast.Node): ast.Index {
 
 function bind(source: ast.Node, name: string, body: ast.Node): ast.Bind {
 	return { type: 'bind', source, patterns: [ { type: 'variable', name } ], body };
+}
+
+/** The one plain variable a binding's patterns amount to, when they do; any other pattern is desugared first. */
+function simplePattern(patterns: readonly ast.Pattern[]): ast.VariablePattern | undefined {
+	const pattern = patterns[0]!;
+	return patterns.length === 1 && pattern.type === 'variable' ? pattern : undefined;
+}
+
+/**
+ * `reduce`, over whatever its state is — a value, or a path and the value at it. `items` runs
+ * afresh for each initial state; each item is pushed on the environment the update runs in, and
+ * the update's last output is the next state, `none` when it has none.
+ */
+function *reduce<State>(inits: Iterable<State>, items: () => Iterable<Value>, env: Env, update: (state: State, bound: Env) => Iterable<State>, none: () => State): Generator<State> {
+	for (const init of inits) {
+		let state = init;
+		for (const item of items()) {
+			const bound = push(env, item);
+			let empty = true;
+			for (const output of update(state, bound)) {
+				state = output;
+				empty = false;
+			}
+			if (empty) {
+				state = none();
+			}
+		}
+		yield state;
+	}
+}
+
+/** `foreach`, as {@link reduce}: every output of the update is a state, and is yielded, through the extract when there is one. */
+function *foreach<State>(inits: Iterable<State>, items: () => Iterable<Value>, env: Env, update: (state: State, bound: Env) => Iterable<State>, extract: ((state: State, bound: Env) => Iterable<State>) | null): Generator<State> {
+	for (const init of inits) {
+		let state = init;
+		for (const item of items()) {
+			const bound = push(env, item);
+			for (const output of update(state, bound)) {
+				state = output;
+				if (extract === null) {
+					yield output;
+				} else {
+					yield* extract(output, bound);
+				}
+			}
+		}
+	}
 }
 
 /** Every variable a pattern binds. */
@@ -225,7 +280,11 @@ class Compiler {
 				return this.pathBind(node, scope);
 			case 'label':
 				return this.pathLabel(node, scope);
-			case 'variable': case 'reduce': case 'foreach': case 'break':
+			case 'reduce':
+				return this.pathReduce(node, scope);
+			case 'foreach':
+				return this.pathForeach(node, scope);
+			case 'variable': case 'break':
 				return invalid(this.value(node, scope));
 			case 'identity': case 'recurse': case 'literal': case 'string': case 'format': case 'index': case 'slice': case 'iterate': case 'try':
 			case 'pipe': case 'comma': case 'binary': case 'and': case 'or': case 'alternative': case 'negate': case 'assign': case 'if': case 'loc': case 'array': case 'object': {
@@ -501,10 +560,8 @@ class Compiler {
 		if (desugared !== node) {
 			return this.value(desugared, scope);
 		}
-		const name = (node.patterns[0] as ast.VariablePattern).name;
 		const source = this.value(node.source, scope);
-		const inner = scope.child();
-		inner.vars.set(name, scope.depth);
+		const inner = scope.withVariable(simplePattern(node.patterns)!.name);
 		const body = this.value(node.body, inner);
 		if (!isStream(source) && !isStream(body)) {
 			return (input, env) => body(input, push(env, source(input, env)));
@@ -523,10 +580,8 @@ class Compiler {
 		if (desugared !== node) {
 			return this.path(desugared, scope);
 		}
-		const name = (node.patterns[0] as ast.VariablePattern).name;
 		const sources = this.generator(node.source, scope);
-		const inner = scope.child();
-		inner.vars.set(name, scope.depth);
+		const inner = scope.withVariable(simplePattern(node.patterns)!.name);
 		const body = this.path(node.body, inner);
 		return function*(path, value, env) {
 			for (const bound of sources(value, env)) {
@@ -542,7 +597,7 @@ class Compiler {
 	 * moves on to the next pattern, which is `try` with the original input restored.
 	 */
 	private desugar(node: ast.Bind): ast.Node {
-		if (node.patterns.length === 1 && node.patterns[0]!.type === 'variable') {
+		if (simplePattern(node.patterns) !== undefined) {
 			return node;
 		}
 		const source = this.synthetic();
@@ -589,68 +644,86 @@ class Compiler {
 
 	/** `reduce source as $x (init; update)`: the state, pushed through the update for each output of the source. */
 	private reduce(node: ast.Reduce, scope: Scope): Filter {
-		if (node.pattern.type !== 'variable') {
+		const inner = this.itemScope(node, scope);
+		if (inner === undefined) {
 			return this.value(this.desugarFold(node), scope);
 		}
 		const inits = this.generator(node.init, scope);
 		const sources = this.generator(node.source, scope);
-		const inner = scope.child();
-		inner.vars.set(node.pattern.name, scope.depth);
 		const updates = this.generator(node.update, inner);
 		return function*(input, env) {
-			for (const init of inits(input, env)) {
-				let state = init;
-				for (const item of sources(input, env)) {
-					const bound = push(env, item);
-					let next: Value = null;
-					for (const output of updates(state, bound)) {
-						next = output;
-					}
-					state = next;
-				}
-				yield state;
-			}
+			yield* reduce(inits(input, env), () => sources(input, env), env, updates, () => null);
+		};
+	}
+
+	/**
+	 * `reduce` as a path expression: the state is a path and the value at it, and the init and the
+	 * update are path expressions of it. An update with no output leaves no path, which is invalid.
+	 */
+	private pathReduce(node: ast.Reduce, scope: Scope): PathFilter {
+		const inner = this.itemScope(node, scope);
+		if (inner === undefined) {
+			return this.path(this.desugarFold(node), scope);
+		}
+		const inits = this.path(node.init, scope);
+		const sources = this.generator(node.source, scope);
+		const updates = this.path(node.update, inner);
+		return function*(path, value, env) {
+			yield* reduce(inits(path, value, env), () => sources(value, env), env, ([ at, state ], bound) => updates(at, state, bound), () => invalidPath(null));
 		};
 	}
 
 	/** `foreach source as $x (init; update; extract)`: every intermediate state, through the extract when there is one. */
 	private foreach(node: ast.Foreach, scope: Scope): Filter {
-		if (node.pattern.type !== 'variable') {
+		const inner = this.itemScope(node, scope);
+		if (inner === undefined) {
 			return this.value(this.desugarFold(node), scope);
 		}
 		const inits = this.generator(node.init, scope);
 		const sources = this.generator(node.source, scope);
-		const inner = scope.child();
-		inner.vars.set(node.pattern.name, scope.depth);
 		const updates = this.generator(node.update, inner);
 		const extracts = node.extract === null ? null : this.generator(node.extract, inner);
 		return function*(input, env) {
-			for (const init of inits(input, env)) {
-				let state = init;
-				for (const item of sources(input, env)) {
-					const bound = push(env, item);
-					for (const output of updates(state, bound)) {
-						state = output;
-						if (extracts === null) {
-							yield output;
-						} else {
-							yield* extracts(output, bound);
-						}
-					}
-				}
-			}
+			yield* foreach(inits(input, env), () => sources(input, env), env, updates, extracts);
 		};
+	}
+
+	/** `foreach` as a path expression, as {@link pathReduce}. */
+	private pathForeach(node: ast.Foreach, scope: Scope): PathFilter {
+		const inner = this.itemScope(node, scope);
+		if (inner === undefined) {
+			return this.path(this.desugarFold(node), scope);
+		}
+		const inits = this.path(node.init, scope);
+		const sources = this.generator(node.source, scope);
+		const updates = this.path(node.update, inner);
+		const extracts = node.extract === null ? null : this.path(node.extract, inner);
+		return function*(path, value, env) {
+			yield* foreach(
+				inits(path, value, env),
+				() => sources(value, env),
+				env,
+				([ at, state ], bound) => updates(at, state, bound),
+				extracts === null ? null : ([ at, state ], bound) => extracts(at, state, bound),
+			);
+		};
+	}
+
+	/** The scope a fold's update and extract run in, the item bound; undefined when the pattern is one to desugar first. */
+	private itemScope(node: ast.Reduce | ast.Foreach, scope: Scope): Scope | undefined {
+		const pattern = simplePattern(node.patterns);
+		return pattern === undefined ? undefined : scope.withVariable(pattern.name);
 	}
 
 	/** A fold over a destructuring pattern binds the item to a variable and destructures that inside. */
 	private desugarFold(node: ast.Reduce | ast.Foreach): ast.Node {
 		const item = this.synthetic();
-		const destructure = (body: ast.Node): ast.Node => ({ type: 'bind', source: variable(item), patterns: [ node.pattern ], body });
-		const pattern: ast.VariablePattern = { type: 'variable', name: item };
+		const destructure = (body: ast.Node): ast.Node => ({ type: 'bind', source: variable(item), patterns: node.patterns, body });
+		const patterns: ast.VariablePattern[] = [ { type: 'variable', name: item } ];
 		if (node.type === 'reduce') {
-			return { ...node, pattern, update: destructure(node.update) };
+			return { ...node, patterns, update: destructure(node.update) };
 		}
-		return { ...node, pattern, update: destructure(node.update), extract: node.extract === null ? null : destructure(node.extract) };
+		return { ...node, patterns, update: destructure(node.update), extract: node.extract === null ? null : destructure(node.extract) };
 	}
 
 	/** `label $name | body`: a token pushed on the environment, which `break $name` throws and this catches. */

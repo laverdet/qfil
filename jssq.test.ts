@@ -155,6 +155,10 @@ agree('construction', [
 	[ '{a: .b?}', { b: 1 } ],
 	[ '{a: -1}, {a: 1 | . + 1}, {a: try 1}, {a: if . then 1 else 2 end}', true ],
 	[ '{a: reduce .[] as $x (0; .+$x)}', [ 1, 2 ] ],
+	[ '[1, # one\n 2] # two' ],
+	[ '1 # a comment ending in a backslash continues \\\n + 2' ],
+	[ '1 # two backslashes do not \\\\\n + 2' ],
+	[ '1 # three do \\\\\\\n + 2 \\\n + 3' ],
 	[ '{a: .b.c[0]?, b: .x[]}', { b: { c: [ 9 ] }, x: [ 1, 2 ] } ],
 	[ '{"a"}', { a: 1 } ],
 	[ '{a: 1}.a' ],
@@ -250,6 +254,9 @@ agree('generators', [
 	[ 'reduce .[] as $x (0; . + $x) | . + 1', [ 1, 2 ] ],
 	[ 'reduce .[] as $x (0; . + $x) + 1', [ 1, 2 ] ],
 	[ 'reduce .[] as $x (0; . + $x) as $s | $s', [ 1, 2 ] ],
+	[ 'reduce ([1],2) as [$a] ?// $a (0; . + $a)' ],
+	[ 'reduce ([1],"x") as [$a] ?// $a (0; . + $a)' ],
+	[ '[foreach ([1],2) as [$a] ?// $a (0; . + $a; [$a, .])]' ],
 	[ '[.[] | (., . * 2)]', [ 1, 2 ] ],
 	[ '[(1,2) | (., . * 10) | (., . + 100)]' ],
 	[ '[(1,2), (3,4) | (., . * 10) | (., . + 100) | (., . + 1000) | tostring | ascii_downcase | ltrimstr("x") | ascii_upcase]' ],
@@ -386,6 +393,8 @@ agree('assignment and paths', [
 	[ 'path(try .a catch .b)', null ],
 	[ '[path(.a, .b | .c)]', {} ],
 	[ 'path(reduce .[] as $x (.; .[$x]))', [ 0, 1 ] ],
+	[ 'path(foreach ("a","b") as $k (.; .[$k]) | select(false))' ],
+	[ '[path(foreach ("a","b") as $k (.; .[$k]; empty))]' ],
 ]);
 
 agree('builtins', [
@@ -493,6 +502,22 @@ divergent('jq 1.8 quirks not followed', [
 	// jq 1.8.2's `repeat` yields `f` of the same input forever; the documented definition is kept
 	[ '[limit(5; repeat(. * 2))]', 1, [ [ 1, 2, 4, 8, 16 ] ] ],
 	[ '[limit(3; repeat(. * 2, . * 3))]', 1, [ [ 1, 2, 4 ] ] ],
+	// jq tracks paths through `reduce` and `foreach` only by accident: the path resets whenever the
+	// fold is backtracked into (`[path(…)]` of the same fold gives `[[]]`), and any non-null value
+	// along the way is an "Invalid path expression". Here the state is a path and its value
+	// throughout, as `getpath` would have it.
+	[ 'path(reduce ("a","b") as $k (.; .[$k]))', { a: { b: 1 } }, [ [ 'a', 'b' ] ] ],
+	[ '[path(reduce (0,1) as $x (.; .[$x]))]', null, [ [ [ 0, 1 ] ] ] ],
+	[ '[path(foreach ("a","b") as $k (.; .[$k]))]', null, [ [ [ 'a' ], [ 'a', 'b' ] ] ] ],
+	[ '[path(foreach ("a","b") as $k (.; .[$k]; .x))]', null, [ [ [ 'a', 'x' ], [ 'a', 'b', 'x' ] ] ] ],
+	[ '[path(reduce (0,1) as $x (.; .[$x], .[$x + 10]))]', null, [ [ [ 10, 11 ] ] ] ],
+	[ 'path(reduce (["a"],["b"]) as [$k] (.; .[$k]))', null, [ [ 'a', 'b' ] ] ],
+	[ 'reduce ("a","b") as $k (.; .[$k]) = 1', {}, [ { a: { b: 1 } } ] ],
+	[ 'reduce range(1) as $x (.a; .b) |= 5', {}, [ { a: { b: 5 } } ] ],
+	[ 'path(reduce range(1) as $x (.a; empty))', null, 'error' ],
+	// When a later `?//` pattern is tried inside a fold, jq 1.8.2 loses the state accumulated so far
+	// (it yields 1, 3, 3); the state before the failed update is kept
+	[ '[foreach ([1],2,{"a":3}) as [$a] ?// $a ?// {a: $a} (0; . + $a)]', null, [ [ 1, 3, 6 ] ] ],
 ]);
 
 void describe('cli', () => {

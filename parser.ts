@@ -24,6 +24,8 @@ const comparisonOperators: readonly ast.BinaryOperator[] = [ '==', '!=', '<=', '
 const identifierRegex = /[A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*/y;
 const numberRegex = /(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?/y;
 const formatRegex = /@[A-Za-z0-9_]+/y;
+/** The rest of a comment: to the end of the line, and on past it when the line ends in an odd number of backslashes, as jq 1.7 has it. */
+const commentRegex = /(?:\\\\|\\\r?\n|[^\n])*/y;
 
 function isIdentifierStart(code: number): boolean {
 	return (code >= 0x61 && code <= 0x7a) || (code >= 0x41 && code <= 0x5a) || code === 0x5f;
@@ -377,32 +379,32 @@ class Parser {
 		});
 	}
 
-	// reduce := 'reduce' postfix 'as' pattern '(' pipe ';' pipe ')'
+	// reduce := 'reduce' postfix 'as' patterns '(' pipe ';' pipe ')'
 	private reduce(): ast.Node {
 		const source = this.postfix(false);
 		this.expectKeyword('as');
-		const pattern = this.pattern();
+		const patterns = this.patterns();
 		this.expect('(');
 		const [ init, update ] = this.delimited(() => this.separated(';', () => this.pipe()));
 		this.expect(')');
 		if (init === undefined || update === undefined) {
 			throw this.error('`reduce` takes an initial value and an update: `reduce … as $x (init; update)`');
 		}
-		return { type: 'reduce', source, pattern, init, update };
+		return { type: 'reduce', source, patterns, init, update };
 	}
 
-	// foreach := 'foreach' postfix 'as' pattern '(' pipe ';' pipe (';' pipe)? ')'
+	// foreach := 'foreach' postfix 'as' patterns '(' pipe ';' pipe (';' pipe)? ')'
 	private foreach(): ast.Node {
 		const source = this.postfix(false);
 		this.expectKeyword('as');
-		const pattern = this.pattern();
+		const patterns = this.patterns();
 		this.expect('(');
 		const [ init, update, extract ] = this.delimited(() => this.separated(';', () => this.pipe()));
 		this.expect(')');
 		if (init === undefined || update === undefined) {
 			throw this.error('`foreach` takes an initial value and an update: `foreach … as $x (init; update; extract)`');
 		}
-		return { type: 'foreach', source, pattern, init, update, extract: extract ?? null };
+		return { type: 'foreach', source, patterns, init, update, extract: extract ?? null };
 	}
 
 	// label := 'label' '$' IDENT '|' pipe
@@ -658,8 +660,8 @@ class Parser {
 			if (code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d) {
 				++this.index;
 			} else if (code === 0x23 /* # */) {
-				const next = source.indexOf('\n', this.index);
-				this.index = next === -1 ? source.length : next;
+				++this.index;
+				this.match(commentRegex);
 			} else {
 				return;
 			}

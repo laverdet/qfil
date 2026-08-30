@@ -156,18 +156,20 @@ export interface If {
 	readonly else: Node | null;
 }
 
+/** `reduce source as pattern ?// pattern … (init; update)` */
 export interface Reduce {
 	readonly type: 'reduce';
 	readonly source: Node;
-	readonly pattern: Pattern;
+	readonly patterns: readonly Pattern[];
 	readonly init: Node;
 	readonly update: Node;
 }
 
+/** `foreach source as pattern ?// pattern … (init; update; extract)` */
 export interface Foreach {
 	readonly type: 'foreach';
 	readonly source: Node;
-	readonly pattern: Pattern;
+	readonly patterns: readonly Pattern[];
 	readonly init: Node;
 	readonly update: Node;
 	readonly extract: Node | null;

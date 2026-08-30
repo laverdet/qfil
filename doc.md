@@ -31,6 +31,12 @@ implementation deliberately differs:
 - Error messages approximate jq's; `try … catch .` sees a message of the same general form.
 - `repeat(f)` keeps its documented meaning (`., (f | repeat(f))`); jq 1.8.2 yields `f` of the same
   input forever.
+- `reduce` and `foreach` are path expressions whose state is a path and the value at it, so
+  `path(reduce ("a","b") as $k (.; .[$k]))` is `["a","b"]` whatever the input. jq's own tracking
+  through a fold is accidental: the path resets when the fold is backtracked into, and any non-null
+  value along the way is an invalid path expression.
+- `?//` inside `reduce` or `foreach` keeps the state accumulated before the pattern that failed;
+  jq 1.8.2 loses it.
 - A definition that recurses does so on the JavaScript stack, a few thousand levels deep. jq
   itself turns tail calls into loops; `until`, `while`, `repeat` and `recurse` here run on the
   heap, but a user-written `def cnt: … | cnt` does not yet.
@@ -108,7 +114,9 @@ its own class that `try` lets pass.
 `|=`, `=`, `path(f)`, `del` and their kin need the left side as paths rather than values, so every
 construct that is path-transparent in jq has a second form, `path`, yielding `[path, value]` pairs
 for a path and the value at it; the runtime supplies it for indexing, iteration, `|`, `,`, `if`,
-`//`, `try`, `..`, and the library for `select` and the rest. Updates go through an `Editor` that
+`//`, `try`, `..`, the compiler for its binding forms (`as`, `def`, `label`, and `reduce`/`foreach`,
+whose state is then a path and its value), and the library for `select` and the rest. Updates go
+through an `Editor` that
 copies each container the first time a path passes through it and writes in place thereafter, so
 `.[] |= f` over an array is linear.
 
