@@ -3,12 +3,16 @@
  * `jssq` — jq at a shell prompt, compiled to JavaScript: `jssq [options] <filter> [file...]`.
  */
 import type { Value } from 'jssq/compiler/filter.js';
+import type { RunOptions } from 'jssq/index.js';
 import * as fs from 'node:fs';
 import process from 'node:process';
 import * as util from 'node:util';
 import { CompileError } from 'jssq/compiler/filter.js';
 import { ParseError } from 'jssq/compiler/parser.js';
 import { compile } from 'jssq/index.js';
+import { lib as jqLib } from 'jssq/runtime/jq/index.js';
+import { runtime as jqRuntime } from 'jssq/runtime/jq/runtime.js';
+import { fromjson as jqFromjson } from 'jssq/runtime/jq/value.js';
 import { Halt, JqError, compareStrings, isObject, newObject, tojson } from 'jssq/runtime/js/value.js';
 
 const USAGE = `usage: jssq [options] <filter> [file...]
@@ -26,11 +30,18 @@ const USAGE = `usage: jssq [options] <filter> [file...]
   -e, --exit-status      exit 1 when the last output is false or null, 4 when there is none
       --arg <name> <value>     bind $name to a string
       --argjson <name> <json>  bind $name to a JSON value
+      --runtime <js|jq>  JavaScript's numbers and order (default), or jq's
   -h, --help
 `;
 
+/** The runtimes a filter can run with, each with how it reads JSON. */
+const flavours: Readonly<Record<string, { readonly options: RunOptions; readonly parse: (text: string) => Value }>> = {
+	js: { options: {}, parse: text => JSON.parse(text) as Value },
+	jq: { options: { runtime: jqRuntime, lib: jqLib }, parse: jqFromjson },
+};
+
 /** Splits a text holding any number of JSON values, whitespace-separated, into the values. */
-export function parseJsonStream(text: string): Value[] {
+export function parseJsonStream(text: string, parse: (text: string) => Value): Value[] {
 	const values: Value[] = [];
 	let at = 0;
 	while (true) {
@@ -41,7 +52,7 @@ export function parseJsonStream(text: string): Value[] {
 			return values;
 		}
 		const end = scanValue(text, at);
-		values.push(JSON.parse(text.slice(at, end)) as Value);
+		values.push(parse(text.slice(at, end)));
 		at = end;
 	}
 }
@@ -172,6 +183,7 @@ export function main(argv: readonly string[]): number {
 			tab: { type: 'boolean' },
 			indent: { type: 'string' },
 			'exit-status': { type: 'boolean', short: 'e' },
+			runtime: { type: 'string' },
 			help: { type: 'boolean', short: 'h' },
 		},
 	});
@@ -179,6 +191,9 @@ export function main(argv: readonly string[]): number {
 		process.stdout.write(USAGE);
 		return 0;
 	}
+	const flavour = flavours[flags.runtime ?? 'js'] ?? function() {
+		throw new Error(`--runtime must be one of ${Object.keys(flavours).join(', ')}`);
+	}();
 	const [ source, ...files ] = positionals;
 	if (source === undefined) {
 		process.stderr.write(USAGE);
@@ -196,7 +211,7 @@ export function main(argv: readonly string[]): number {
 			yield* text.endsWith('\n') ? lines.slice(0, -1) : lines;
 			return;
 		}
-		const parsed = parseJsonStream(text);
+		const parsed = parseJsonStream(text, flavour.parse);
 		if (flags.slurp === true) {
 			yield parsed;
 		} else {
@@ -204,7 +219,7 @@ export function main(argv: readonly string[]): number {
 		}
 	}();
 	const remaining = inputs[Symbol.iterator]();
-	const filter = compile(source, { args, inputs: { [Symbol.iterator]: () => remaining } });
+	const filter = compile(source, { ...flavour.options, args, inputs: { [Symbol.iterator]: () => remaining } });
 	const indent = function() {
 		if (flags.tab === true) {
 			return '\t';

@@ -3,44 +3,55 @@
  * outputs must agree as JSON values. A case where both raise an error passes without comparing
  * the messages. `divergent` holds the cases where this implementation is meant to differ.
  */
-import type { Lib, Value } from './index.js';
+import type { Lib, RunOptions, Value } from './index.js';
 import * as assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import * as path from 'node:path';
 import process from 'node:process';
 import { describe, it } from 'node:test';
+import { lib as jqLib } from './runtime/jq/index.js';
+import { runtime as jqRuntime } from './runtime/jq/runtime.js';
+import { fromjson as jqFromjson } from './runtime/jq/value.js';
 import { tojson } from './runtime/js/value.js';
 import { compile, constant, lib, overload, run, values } from './index.js';
 
 type Case = readonly [ filter: string, input?: Value, inputs?: readonly Value[] ];
 
-function jq(filter: string, input: Value, inputs: readonly Value[] = []): Value[] | 'error' {
+/** jq's output for a filter over some JSON text: one line of text per output. */
+function jqOutput(filter: string, stdin: string): string[] | 'error' {
 	try {
-		const text = execFileSync('jq', [ '-c', filter ], {
-			input: [ input, ...inputs ].map(value => JSON.stringify(value)).join('\n'),
-			stdio: [ 'pipe', 'pipe', 'pipe' ],
-		}).toString();
-		return text.trim().split('\n').filter(line => line !== '').map(line => JSON.parse(line) as Value);
+		const text = execFileSync('jq', [ '-c', filter ], { input: stdin, stdio: [ 'pipe', 'pipe', 'pipe' ] }).toString();
+		return text.trim().split('\n').filter(line => line !== '');
 	} catch {
 		return 'error';
 	}
 }
 
-/** Runs as the command line does: once per input, the rest being what `input` reads. */
-function ours(filter: string, input: Value, inputs: readonly Value[] = []): Value[] | 'error' {
-	const iterator = [ input, ...inputs ][Symbol.iterator]();
+function expected(filter: string, input: Value, inputs: readonly Value[] = []): Value[] | 'error' {
+	const output = jqOutput(filter, [ input, ...inputs ].map(value => JSON.stringify(value)).join('\n'));
+	return output === 'error' ? output : output.map(line => JSON.parse(line) as Value);
+}
+
+/** Runs as the command line does: once per input, the rest being what `input` reads; each output as JSON text. */
+function oursOutput(filter: string, values: readonly Value[], options: RunOptions = {}): string[] | 'error' {
+	const iterator = values[Symbol.iterator]();
 	const shared = { [Symbol.iterator]: () => iterator };
 	try {
-		const compiled = compile(filter, { inputs: shared, debug: () => {} });
+		const compiled = compile(filter, { inputs: shared, debug: () => {}, ...options });
 		const outputs: Value[] = [];
 		for (const value of shared) {
 			outputs.push(...compiled.stream ? compiled(value) : [ compiled(value) ]);
 		}
-		// Through JSON, since that is how jq's output reaches us: NaN and infinities have no other form
-		return outputs.map(output => JSON.parse(tojson(output)) as Value);
+		return outputs.map(output => tojson(output));
 	} catch {
 		return 'error';
 	}
+}
+
+/** Through JSON, since that is how jq's output reaches us: NaN and infinities have no other form. */
+function ours(filter: string, input: Value, inputs: readonly Value[] = [], options?: RunOptions): Value[] | 'error' {
+	const output = oursOutput(filter, [ input, ...inputs ], options);
+	return output === 'error' ? output : output.map(line => JSON.parse(line) as Value);
 }
 
 /** Cases where this implementation deliberately differs from jq 1.8. */
@@ -54,16 +65,16 @@ function divergent(name: string, cases: readonly (readonly [ filter: string, inp
 	});
 }
 
-function agree(name: string, cases: readonly Case[]): void {
+function agree(name: string, cases: readonly Case[], options?: RunOptions): void {
 	void describe(name, () => {
 		for (const [ filter, input = null, inputs = [] ] of cases) {
 			void it(filter, () => {
-				const expected = jq(filter, input, inputs);
-				const actual = ours(filter, input, inputs);
-				if (expected === 'error') {
+				const wanted = expected(filter, input, inputs);
+				const actual = ours(filter, input, inputs, options);
+				if (wanted === 'error') {
 					assert.equal(actual, 'error', `jq raised an error but we produced ${JSON.stringify(actual)}`);
 				} else {
-					assert.deepEqual(actual, expected);
+					assert.deepEqual(actual, wanted);
 				}
 			});
 		}
@@ -118,10 +129,7 @@ agree('operators', [
 	[ '1 / 0' ],
 	[ '[] - 1' ],
 	[ '{} + []' ],
-	[ '{a:1,b:2} == {b:2,a:1}, 1 == 1.0, [1] == [1], ("a" < "b"), ([] < {}), (null < false), (false < true), (true < 0)' ],
-	[ '[1, "a", null, true, [], {}] | sort' ],
-	[ 'sort', [ { b: 1 }, { a: 2 }, { a: 1, b: 0 }, { a: 1 } ] ],
-	[ 'sort', [ [ 1, 2 ], [ 1 ], [ 0, 5 ], [] ] ],
+	[ '{a:1,b:2} == {b:2,a:1}, 1 == 1.0, [1] == [1], ("a" < "b"), (false < true), (1 < 2), (2 <= 2)' ],
 	[ 'sort', [ 'b', 'a', 'é', '😀', 'B', '' ] ],
 	[ '[.[] | not]', [ true, false, null, 0, '' ] ],
 	[ '[(true, false) and (true, false)]' ],
@@ -520,6 +528,54 @@ divergent('jq 1.8 quirks not followed', [
 	[ '[foreach ([1],2,{"a":3}) as [$a] ?// $a ?// {a: $a} (0; . + $a)]', null, [ [ 1, 3, 6 ] ] ],
 ]);
 
+/** Cases compared as text, from JSON text: where how a number is spelled is the point. */
+function agreeText(name: string, cases: readonly (readonly [ filter: string, input?: string ])[], options: RunOptions, parse: (text: string) => Value): void {
+	void describe(name, () => {
+		for (const [ filter, input = 'null' ] of cases) {
+			void it(filter, () => {
+				const wanted = jqOutput(filter, input);
+				const actual = oursOutput(filter, [ parse(input) ], options);
+				if (wanted === 'error') {
+					assert.equal(actual, 'error', `jq raised an error but we produced ${JSON.stringify(actual)}`);
+				} else {
+					assert.deepEqual(actual, wanted);
+				}
+			});
+		}
+	});
+}
+
+divergent('order is JavaScript\'s', [
+	// Strings order among themselves; anything else subtracts, which is NaN for a container. jq's
+	// total order is the jq runtime's, below
+	[ '[(null < false), ([] < {}), (true < 0), (1 < "2"), (false < true)]', null, [ [ false, false, false, true, true ] ] ],
+	[ 'sort', [ { b: 1 }, { a: 2 } ], [ [ { b: 1 }, { a: 2 } ] ] ],
+	[ 'sort', [ 3, '10', 2 ], [ [ 2, 3, '10' ] ] ],
+]);
+
+const jqOptions: RunOptions = { runtime: jqRuntime, lib: jqLib };
+
+agree('jq runtime: jq\'s order', [
+	[ '([] < {}), (null < false), (true < 0), (1 < "a"), ({} > []), ([1] < [1, 0])' ],
+	[ '[1, "a", null, true, [], {}] | sort' ],
+	[ 'sort', [ { b: 1 }, { a: 2 }, { a: 1, b: 0 }, { a: 1 } ] ],
+	[ 'sort', [ [ 1, 2 ], [ 1 ], [ 0, 5 ], [] ] ],
+	[ 'unique, group_by(type)', [ 1, [ 1 ], { a: 1 }, '1', null, 1, true ] ],
+	[ 'sort_by(.a)', [ { a: [ 1 ] }, { a: 'x' }, { a: null }, { a: {} } ] ],
+], jqOptions);
+
+agreeText('jq runtime: numbers keep their spelling', [
+	[ '1.000, 1e2, 1E2, 0.10, 100000000000000000000, -1.000, 3.0, 0.0, 1.10e1, 1.5e300, 00, 1e-7, 0.000001' ],
+	[ '[1.000], {a: 1.000}, (1.000 | tostring), (1.000 | tojson), ([1.000] | tojson), "\\(1.000)"' ],
+	[ '(1.000 + 0), (1.000 * 1), -(1.000), (1.000 | floor), (1.000 == 1), ([1.000, 1] | unique), (1.000 | type)' ],
+	[ '("1.000" | tonumber), ("1.000" | fromjson), ("1.000" | tonumber | tostring), ([1,2,3] | .[1.000]), ("x" * 2.000), ([1,2,3] | .[0:2.000]), [range(2.000)]' ],
+	[ '1.000 as $x | $x, ([1.000] | .[0]), ({} | .a = 1.000), ([1.000] | sort), (1.000 | if . then "t" else "f" end), (1.000 | . as [$a] ?// $a | $a)' ],
+	[ '., .[0], (.[0] | tojson), map(. + 0)', '[1.10, 12345678901234567890, 1E2, 1.0]' ],
+	[ '(.b | tojson), keys, to_entries', '{"b": 1E2, "a": 1.0}' ],
+	[ '.[] | select(. > 1.5)', '[1.10, 2.50, 3]' ],
+	[ 'to_entries, (.a |= . * 2), del(.b)', '{"a": 1.50, "b": 2.0}' ],
+], jqOptions, jqFromjson);
+
 void describe('cli', () => {
 	const cli = (args: readonly string[], input = '') => {
 		const result = spawnSync(process.execPath, [ path.join(import.meta.dirname, 'bin', 'jssq.js'), ...args ], { input, encoding: 'utf8' });
@@ -537,6 +593,7 @@ void describe('cli', () => {
 		assert.equal(cli([ '-n', '-c', '[inputs]' ], '1 2 3').stdout, '[1,2,3]\n');
 		assert.equal(cli([ '-S', '--tab', '.' ], '{"b":1,"a":[1]}').stdout, '{\n\t"a": [\n\t\t1\n\t],\n\t"b": 1\n}\n');
 		assert.equal(cli([ '-j', '.[]' ], '["a","b"]').stdout, 'ab');
+		assert.equal(cli([ '--runtime', 'jq', '-c', '., (. + 0)' ], '1.000').stdout, '1.000\n1\n');
 	});
 	void it('exits as jq does', () => {
 		assert.equal(cli([ '-n', '1 +' ]).status, 3);

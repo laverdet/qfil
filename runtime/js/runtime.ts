@@ -6,24 +6,42 @@
  * meaning for the same syntax.
  */
 import type * as ast from '#/compiler/ast.js';
-import type { Filter, Path, PathFilter, Render, Runtime, Value } from '#/compiler/filter.js';
-import { CompileError, combine, combineStreams, generator, isStream } from '#/compiler/filter.js';
+import type { Filter, Handler, Path, PathFilter, Render, Runtime, Value } from '#/compiler/filter.js';
 import * as intrinsics from './intrinsics.js';
 import { JqError, compare, equal, newObject, tostring, truthy } from './value.js';
+import { CompileError, combine, combineStreams, generator, isStream } from '#/compiler/filter.js';
 
-const binaries: Readonly<Record<ast.BinaryOperator, (left: Value, right: Value) => Value>> = {
-	'+': intrinsics.add,
-	'-': intrinsics.subtract,
-	'*': intrinsics.multiply,
-	'/': intrinsics.divide,
-	'%': intrinsics.modulo,
-	'==': equal,
-	'!=': (left, right) => !equal(left, right),
-	'<': (left, right) => compare(left, right) < 0,
-	'<=': (left, right) => compare(left, right) <= 0,
-	'>': (left, right) => compare(left, right) > 0,
-	'>=': (left, right) => compare(left, right) >= 0,
-};
+export type Operators = Readonly<Record<ast.BinaryOperator, (left: Value, right: Value) => Value>>;
+
+/** The binary operators over an ordering: what `<` and its kin mean is the ordering's to say; arithmetic and equality are fixed. */
+export function operators(compareValues: (left: Value, right: Value) => number): Operators {
+	return {
+		'+': intrinsics.add,
+		'-': intrinsics.subtract,
+		'*': intrinsics.multiply,
+		'/': intrinsics.divide,
+		'%': intrinsics.modulo,
+		'==': equal,
+		'!=': (left, right) => !equal(left, right),
+		'<': (left, right) => compareValues(left, right) < 0,
+		'<=': (left, right) => compareValues(left, right) <= 0,
+		'>': (left, right) => compareValues(left, right) > 0,
+		'>=': (left, right) => compareValues(left, right) >= 0,
+	};
+}
+
+/** The handler of a binary expression over a table of operators. */
+export function binary(ops: Operators): Handler<ast.Binary> {
+	return {
+		// The right operand varies slowest, as jq has it
+		value: (node, render) => {
+			const op = ops[node.op];
+			return combine([ render.value(node.left), render.value(node.right) ], ([ left, right ]) => op(left!, right!), 'last');
+		},
+	};
+}
+
+const binaries = operators(compare);
 
 const nullLiteral: ast.Literal = { type: 'literal', value: null };
 const identity: ast.Identity = { type: 'identity' };
@@ -53,7 +71,7 @@ function formatter(name: string): (value: Value) => string {
 	return value => intrinsics.format(name, value);
 }
 
-/** jq's semantics. */
+/** jq's semantics over JavaScript's values: doubles, and JavaScript's order. */
 export const runtime: Runtime = {
 	invalidPath: intrinsics.invalidPath,
 	identity: {
@@ -254,13 +272,7 @@ export const runtime: Runtime = {
 			};
 		},
 	},
-	binary: {
-		// The right operand varies slowest, as jq has it
-		value: (node, render) => {
-			const op = binaries[node.op];
-			return combine([ render.value(node.left), render.value(node.right) ], ([ left, right ]) => op(left!, right!), 'last');
-		},
-	},
+	binary: binary(binaries),
 	and: {
 		value: (node, render) => logical(node, render, false),
 	},

@@ -616,7 +616,7 @@ class Parser {
 		const text = this.match(numberRegex) ?? (() => {
 			throw this.error('Expected number');
 		})();
-		return { type: 'literal', value: Number(text) };
+		return { type: 'literal', value: Number(text), text };
 	}
 
 	private identifier(): string {

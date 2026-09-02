@@ -16,10 +16,10 @@
 import type * as ast from '#/compiler/ast.js';
 import type { Context, Env, Filter, Lib, LibFunction, PathFilter, Render, Stream, Value, ValueObject } from '#/compiler/filter.js';
 import { add, delpaths, field, getpath, halt, has, iterate, keys, length, recursePaths, setpath, split } from './intrinsics.js';
-import { JqError, compare, describe, fromjson, isObject, newObject, tojson, tonumber, tostring, truthy, typeOf } from './value.js';
+import { JqError, compare, describe, fromjson, isNumber, isObject, newObject, tojson, tonumber, tostring, truthy, typeOf } from './value.js';
 import { constant, overload, runtimePathFunction, streams, values } from '#/compiler/filter.js';
 
-function assertString(value: Value, what: string): string {
+export function assertString(value: Value, what: string): string {
 	if (typeof value !== 'string') {
 		throw new JqError(`${what} input must be a string`);
 	}
@@ -34,14 +34,14 @@ function assertArray(value: Value, what: string): Value[] {
 }
 
 function assertNumber(value: Value, what: string): number {
-	if (typeof value !== 'number') {
+	if (!isNumber(value)) {
 		throw new JqError(`${describe(value)} number required for ${what}`);
 	}
-	return value;
+	return Number(value);
 }
 
 /** A library function of the input alone. */
-function unary(fn: (input: Value) => Value): LibFunction {
+export function unary(fn: (input: Value) => Value): LibFunction {
 	return _render => input => fn(input);
 }
 
@@ -61,28 +61,61 @@ function mapOver(inputs: Iterable<Value>, filter: (value: Value) => Iterable<Val
 	return result;
 }
 
-/** Sorts indices of `values` by their keys, keeping order among equal keys. */
-function order(values: Value[], keys: Value[]): number[] {
-	return values.map((_value, ii) => ii).sort((left, right) => compare(keys[left]!, keys[right]!) || left - right);
-}
-
-function groups(values: Value[], keys: Value[]): Value[][] {
-	const result: Value[][] = [];
-	let previous: Value | undefined;
-	for (const ii of order(values, keys)) {
-		const key = keys[ii]!;
-		if (result.length === 0 || compare(previous!, key) !== 0) {
-			result.push([]);
-			previous = key;
-		}
-		result[result.length - 1]!.push(values[ii]!);
-	}
-	return result;
-}
-
 /** `sort_by(f)` keys: `[f]` of each element. */
 function keysBy(values: Value[], filter: Stream, env: Env): Value[] {
 	return values.map(value => [ ...filter(value, env) ]);
+}
+
+/**
+ * The functions that put values in order — `sort`, `sort_by`, `group_by`, `unique` — over a
+ * comparison, since what the order is depends on the runtime: JavaScript's here, jq's in the jq
+ * runtime. The keys of `sort_by` and `group_by` are `[f]` of each value, compared element by element.
+ */
+export function ordered(compareValues: (left: Value, right: Value) => number): Lib {
+	type Comparison = typeof compareValues;
+	const compareKeys: Comparison = (left, right) => {
+		const lhs = left as Value[];
+		const rhs = right as Value[];
+		const length = Math.min(lhs.length, rhs.length);
+		for (let ii = 0; ii < length; ++ii) {
+			const order = compareValues(lhs[ii]!, rhs[ii]!);
+			if (order !== 0) {
+				return order;
+			}
+		}
+		return lhs.length - rhs.length;
+	};
+	// Indices of `items` sorted by their keys, keeping order among equal keys
+	const order = (items: Value[], keys: Value[], by: Comparison): number[] =>
+		items.map((_value, ii) => ii).sort((left, right) => by(keys[left]!, keys[right]!) || left - right);
+	const groups = (items: Value[], keys: Value[], by: Comparison): Value[][] => {
+		const result: Value[][] = [];
+		let previous: Value | undefined;
+		for (const ii of order(items, keys, by)) {
+			const key = keys[ii]!;
+			if (result.length === 0 || by(previous!, key) !== 0) {
+				result.push([]);
+				previous = key;
+			}
+			result[result.length - 1]!.push(items[ii]!);
+		}
+		return result;
+	};
+	return {
+		sort: unary(input => [ ...assertArray(input, 'sort') ].sort(compareValues)),
+		sort_by: withFilter(filter => (input, env) => {
+			const items = assertArray(input, 'sort_by');
+			return order(items, keysBy(items, filter, env), compareKeys).map(ii => items[ii]!);
+		}),
+		group_by: withFilter(filter => (input, env) => {
+			const items = assertArray(input, 'group_by');
+			return groups(items, keysBy(items, filter, env), compareKeys);
+		}),
+		unique: unary(input => {
+			const items = assertArray(input, 'unique');
+			return groups(items, items, compareValues).map(group => group[0]!);
+		}),
+	};
 }
 
 function flatten(value: Value): Value[] {
@@ -123,7 +156,7 @@ function join(value: Value, separator: Value): Value {
 				return '';
 			} else if (typeof element === 'string') {
 				return element;
-			} else if (typeof element === 'object') {
+			} else if (Array.isArray(element) || isObject(element)) {
 				throw new JqError(`${describe(element)} cannot be added to a string`);
 			}
 			return tojson(element);
@@ -214,19 +247,19 @@ function *walk(value: Value, env: Env, filter: Stream): Generator<Value> {
 }
 
 function rangeBound(value: Value): number {
-	if (typeof value !== 'number') {
+	if (!isNumber(value)) {
 		throw new JqError('Range bounds must be numeric');
 	}
-	return value;
+	return Number(value);
 }
 
 function limitCount(value: Value): number {
-	if (typeof value !== 'number') {
+	if (!isNumber(value)) {
 		throw new JqError(`${describe(value)} is not a valid limit`);
 	} else if (value < 0) {
 		throw new JqError("limit doesn't support negative count");
 	}
-	return value;
+	return Number(value);
 }
 
 /** The first output of a stream, or nothing. */
@@ -586,19 +619,7 @@ export const lib: Lib = {
 	any: unary(input => [ ...iterate(input) ].some(truthy)),
 	all: unary(input => [ ...iterate(input) ].every(truthy)),
 	last: unary(input => assertArray(input, 'last').at(-1) ?? null),
-	sort: unary(input => [ ...assertArray(input, 'sort') ].sort(compare)),
-	sort_by: withFilter(filter => (input, env) => {
-		const items = assertArray(input, 'sort_by');
-		return order(items, keysBy(items, filter, env)).map(ii => items[ii]!);
-	}),
-	group_by: withFilter(filter => (input, env) => {
-		const items = assertArray(input, 'group_by');
-		return groups(items, keysBy(items, filter, env));
-	}),
-	unique: unary(input => {
-		const items = assertArray(input, 'unique');
-		return groups(items, items).map(group => group[0]!);
-	}),
+	...ordered(compare),
 	reverse: unary(input => input === null ? [] : [ ...assertArray(input, 'reverse') ].reverse()),
 	flatten: unary(flatten),
 	startswith: (render, prefix) => values(render, [ prefix ], (input, value) => assertString(input, 'startswith').startsWith(assertString(value, 'startswith'))),

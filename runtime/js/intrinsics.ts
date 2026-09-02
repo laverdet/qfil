@@ -4,9 +4,9 @@
  * these; the library (`index.ts`) is built on them too. Nothing here knows about syntax.
  */
 import type { Path, Value, ValueObject } from '#/compiler/filter.js';
-import { Halt, JqError, compare, copyObject, describe, equal, isObject, newObject, tojson, tostring, typeOf } from './value.js';
+import { Halt, JqError, compareStrings, copyObject, describe, equal, isNumber, isObject, newObject, tojson, tostring, typeOf } from './value.js';
 
-export { Halt, JqError, compare, equal, fromjson, tojson, tonumber, tostring, truthy, typeOf } from './value.js';
+export { Halt, JqError, equal, fromjson, tojson, tonumber, tostring, truthy, typeOf } from './value.js';
 
 export function error(value: Value): never {
 	throw new JqError(value);
@@ -38,7 +38,7 @@ export function element(value: Value, index: number): Value {
 export function index(value: Value, key: Value): Value {
 	if (typeof key === 'string') {
 		return field(value, key);
-	} else if (typeof key === 'number') {
+	} else if (isNumber(key)) {
 		return element(value, key);
 	} else if (isObject(key) && (value === null || Array.isArray(value) || typeof value === 'string')) {
 		return slice(value, key.start ?? null, key.end ?? null);
@@ -50,7 +50,7 @@ export function index(value: Value, key: Value): Value {
 export function slice(value: Value, from: Value, to: Value): Value {
 	if (value === null) {
 		return null;
-	} else if ((from !== null && typeof from !== 'number') || (to !== null && typeof to !== 'number')) {
+	} else if ((from !== null && !isNumber(from)) || (to !== null && !isNumber(to))) {
 		throw new JqError('Start and end indices of an array slice must be numbers');
 	} else if (typeof value === 'string' || Array.isArray(value)) {
 		const [ start, end ] = sliceBounds(value.length, from, to);
@@ -83,7 +83,7 @@ export function iterate(value: Value): Iterable<Value> {
 /** `..`: a value and everything beneath it, depth first. */
 export function *recurse(value: Value): Generator<Value> {
 	yield value;
-	if (typeof value === 'object' && value !== null) {
+	if (Array.isArray(value) || isObject(value)) {
 		for (const child of iterate(value)) {
 			yield* recurse(child);
 		}
@@ -93,7 +93,7 @@ export function *recurse(value: Value): Generator<Value> {
 /** `..` as paths. */
 export function *recursePaths(path: Path, value: Value): Generator<[ Path, Value ]> {
 	yield [ path, value ];
-	if (typeof value === 'object' && value !== null) {
+	if (Array.isArray(value) || isObject(value)) {
 		for (const key of keysOf(value)) {
 			yield* recursePaths([ ...path, key ], index(value, key));
 		}
@@ -123,7 +123,7 @@ export function keys(value: Value): Value {
 export function has(value: Value, key: Value): boolean {
 	if (isObject(value) && typeof key === 'string') {
 		return Object.hasOwn(value, key);
-	} else if (Array.isArray(value) && typeof key === 'number') {
+	} else if (Array.isArray(value) && isNumber(key)) {
 		return key >= 0 && key < value.length;
 	}
 	throw new JqError(`Cannot check whether ${typeOf(value)} has a ${typeOf(key)} key`);
@@ -132,7 +132,7 @@ export function has(value: Value, key: Value): boolean {
 export function length(value: Value): number {
 	if (typeof value === 'string') {
 		return value.length;
-	} else if (typeof value === 'number') {
+	} else if (isNumber(value)) {
 		return Math.abs(value);
 	} else if (typeof value === 'boolean') {
 		throw new JqError(`${describe(value)} has no length`);
@@ -145,7 +145,7 @@ export function length(value: Value): number {
 }
 
 export function add(left: Value, right: Value): Value {
-	if (typeof left === 'number' && typeof right === 'number') {
+	if (isNumber(left) && isNumber(right)) {
 		return left + right;
 	} else if (left === null) {
 		return right;
@@ -162,7 +162,7 @@ export function add(left: Value, right: Value): Value {
 }
 
 export function subtract(left: Value, right: Value): Value {
-	if (typeof left === 'number' && typeof right === 'number') {
+	if (isNumber(left) && isNumber(right)) {
 		return left - right;
 	} else if (Array.isArray(left) && Array.isArray(right)) {
 		return left.filter(value => !right.some(other => equal(value, other)));
@@ -171,11 +171,11 @@ export function subtract(left: Value, right: Value): Value {
 }
 
 export function multiply(left: Value, right: Value): Value {
-	if (typeof left === 'number' && typeof right === 'number') {
+	if (isNumber(left) && isNumber(right)) {
 		return left * right;
-	} else if (typeof left === 'string' && typeof right === 'number') {
+	} else if (typeof left === 'string' && isNumber(right)) {
 		return repeat(left, right);
-	} else if (typeof left === 'number' && typeof right === 'string') {
+	} else if (isNumber(left) && typeof right === 'string') {
 		return repeat(right, left);
 	} else if (isObject(left) && isObject(right)) {
 		return merge(left, right);
@@ -199,8 +199,8 @@ function merge(left: ValueObject, right: ValueObject): ValueObject {
 }
 
 export function divide(left: Value, right: Value): Value {
-	if (typeof left === 'number' && typeof right === 'number') {
-		if (right === 0) {
+	if (isNumber(left) && isNumber(right)) {
+		if (Number(right) === 0) {
 			throw new JqError(`${describe(left)} and ${describe(right)} cannot be divided because the divisor is zero`);
 		}
 		return left / right;
@@ -216,7 +216,7 @@ export function split(text: string, separator: string): string[] {
 }
 
 export function modulo(left: Value, right: Value): Value {
-	if (typeof left === 'number' && typeof right === 'number') {
+	if (isNumber(left) && isNumber(right)) {
 		const divisor = Math.trunc(right);
 		if (divisor === 0) {
 			throw new JqError(`${describe(left)} and ${describe(right)} cannot be divided (remainder) because the divisor is zero`);
@@ -227,7 +227,7 @@ export function modulo(left: Value, right: Value): Value {
 }
 
 export function negate(value: Value): Value {
-	if (typeof value === 'number') {
+	if (isNumber(value)) {
 		return -value;
 	}
 	throw new JqError(`${describe(value)} cannot be negated`);
@@ -279,7 +279,7 @@ function setKey(value: Value, key: Value, updated: Value): Value {
 		const result = value === null ? newObject() : copyObject(value as ValueObject);
 		result[key] = updated;
 		return result;
-	} else if (typeof key === 'number') {
+	} else if (isNumber(key)) {
 		const array = value === null ? [] : [ ...value as Value[] ];
 		const whole = Math.trunc(key);
 		const at = whole < 0 ? array.length + whole : whole;
@@ -298,7 +298,7 @@ function setKey(value: Value, key: Value, updated: Value): Value {
 		const array = value === null ? [] : value as Value[];
 		const from = key.start ?? null;
 		const to = key.end ?? null;
-		if ((from !== null && typeof from !== 'number') || (to !== null && typeof to !== 'number')) {
+		if ((from !== null && !isNumber(from)) || (to !== null && !isNumber(to))) {
 			throw new JqError('Start and end indices of an array slice must be numbers');
 		}
 		const [ start, end ] = sliceBounds(array.length, from, to);
@@ -317,12 +317,42 @@ export function delpaths(value: Value, paths: Value): Value {
 			throw new JqError(`Path must be specified as array, not ${typeOf(path)}`);
 		}
 		return path;
-	}).sort(compare).reverse();
+	}).sort(comparePaths).reverse();
 	let result = value;
 	for (const path of sorted) {
 		result = deleteAt(result, path, 0);
 	}
 	return result;
+}
+
+/** Paths in the order deletion undoes: keys numeric, then string, then slice, each in its own order; longer paths after their prefixes. */
+function comparePaths(left: Value[], right: Value[]): number {
+	const length = Math.min(left.length, right.length);
+	for (let ii = 0; ii < length; ++ii) {
+		const order = compareKeys(left[ii]!, right[ii]!);
+		if (order !== 0) {
+			return order;
+		}
+	}
+	return left.length - right.length;
+}
+
+function compareKeys(left: Value, right: Value): number {
+	if (isNumber(left) && isNumber(right)) {
+		return left - right;
+	} else if (typeof left === 'string' && typeof right === 'string') {
+		return compareStrings(left, right);
+	}
+	const rank = (key: Value): number => {
+		if (isNumber(key)) {
+			return 0;
+		} else if (typeof key === 'string') {
+			return 1;
+		} else {
+			return 2;
+		}
+	};
+	return rank(left) - rank(right);
 }
 
 function deleteAt(value: Value, path: Value[], depth: number): Value {
@@ -352,7 +382,7 @@ function deleteKey(value: Value, key: Value): Value {
 		const result = copyObject(value);
 		delete result[key];
 		return result;
-	} else if (typeof key === 'number') {
+	} else if (isNumber(key)) {
 		if (!Array.isArray(value)) {
 			throw new JqError(`Cannot delete field at array index of ${typeOf(value)}`);
 		}
@@ -368,7 +398,7 @@ function deleteKey(value: Value, key: Value): Value {
 		}
 		const from = key.start ?? null;
 		const to = key.end ?? null;
-		if ((from !== null && typeof from !== 'number') || (to !== null && typeof to !== 'number')) {
+		if ((from !== null && !isNumber(from)) || (to !== null && !isNumber(to))) {
 			throw new JqError('Start and end indices of an array slice must be numbers');
 		}
 		const [ start, end ] = sliceBounds(value.length, from, to);
@@ -413,7 +443,7 @@ export class Editor {
 			if (typeof key === 'string') {
 				(value as ValueObject)[key] = updated;
 				return value;
-			} else if (typeof key === 'number') {
+			} else if (isNumber(key)) {
 				const array = value as Value[];
 				const whole = Math.trunc(key);
 				const at = whole < 0 ? array.length + whole : whole;

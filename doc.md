@@ -29,6 +29,14 @@ implementation deliberately differs:
   `{"1":2,"b":1}`). Every object the language makes has a null prototype, so `__proto__` is an
   ordinary key.
 - Error messages approximate jq's; `try … catch .` sees a message of the same general form.
+- Numbers are doubles, printed as JavaScript prints them (`1e+20` comes out as
+  `100000000000000000000`). The jq runtime (`runtime/jq`) keeps a literal's spelling as jq 1.7
+  does — `1.000`, `1E+2`, `11.0` for `1.10e1` — through variables, containers, `tostring`,
+  `tonumber`, `fromjson`, `sort` and negation, until arithmetic touches it.
+- Order, in the default runtime, is JavaScript's: strings compare by code unit, containers are
+  NaN, and anything else subtracts, so `[] < {}` is false, objects do not sort, and
+  `sort_by`/`group_by` compare their keys element by element. The jq runtime has jq's total order:
+  null < false < true < numbers < strings < arrays < objects.
 - `repeat(f)` keeps its documented meaning (`., (f | repeat(f))`); jq 1.8.2 yields `f` of the same
   input forever.
 - `reduce` and `foreach` are path expressions whose state is a path and the value at it, so
@@ -120,6 +128,16 @@ through an `Editor` that
 copies each container the first time a path passes through it and writes in place thereafter, so
 `.[] |= f` over an array is linear.
 
+### Another runtime
+
+`runtime/jq` is the JavaScript runtime with what differs laid over it: a `literal` handler that
+keeps a number's spelling, a `negate` that keeps it too, `binary` over jq's total order, and the
+library with `sort` and its kin over that order (`ordered`) and `tonumber`/`fromjson` keeping
+spellings. A spelled number is a boxed `Number` that remembers its text, so JavaScript itself does
+the unwrapping — arithmetic, comparison and indexing coerce it — and `JSON.stringify` writes the
+spelling through the box's own `toJSON`. The JavaScript runtime counts a boxed `Number` as a
+number (`isNumber`, `typeOf`, `equal`), a JavaScript-native courtesy; it never makes one.
+
 ### Files
 
 - `compiler/parser.ts`, `compiler/ast.ts` — scannerless recursive descent to a plain syntax tree,
@@ -135,5 +153,7 @@ copies each container the first time a path passes through it and writes in plac
 - `runtime/js/intrinsics.ts` — the operations on values: indexing, arithmetic, paths, the
   `Editor`, formats.
 - `runtime/js/value.ts` — comparison, equality and JSON conversion over the contract's values.
+- `runtime/jq/` — jq's numbers and order: spelled numbers as boxed `Number`s, canonical spelling,
+  jq's total order, and the runtime and library laid over the JavaScript ones.
 - `index.ts` — `compile`, `run`, `parse`; `bin/jssq.ts` — the `jssq` binary.
 - `jssq.test.ts` — the differential suite against the `jq` binary.

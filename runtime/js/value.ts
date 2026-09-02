@@ -1,6 +1,8 @@
 /**
- * What a value is to this runtime: jq's ordering, equality and JSON conversions over the plain
- * JSON values the contract declares. Nothing here mutates a value it was given; a result that
+ * What a value is to this runtime: plain JSON as JavaScript holds it, JavaScript's order, deep
+ * equality, and JSON to and from. A boxed `Number` counts as a number — JavaScript coerces one
+ * wherever a number is used, and `isNumber` says so — which is what lets another runtime carry
+ * more on a number than its value. Nothing here mutates a value it was given; a result that
  * differs from its input is a new value sharing whatever it can.
  */
 import type { Value, ValueObject } from '#/compiler/filter.js';
@@ -40,12 +42,22 @@ export function typeOf(value: Value): ValueType {
 		return type;
 	} else if (value === null) {
 		return 'null';
+	} else if (Array.isArray(value)) {
+		return 'array';
+	} else if (value instanceof Number) {
+		return 'number';
+	} else {
+		return 'object';
 	}
-	return Array.isArray(value) ? 'array' : 'object';
+}
+
+/** A number, boxed or not: a boxed `Number` behaves as its number wherever one is used, and the type says as much. */
+export function isNumber(value: Value): value is number {
+	return typeof value === 'number' || value instanceof Number;
 }
 
 export function isObject(value: Value): value is ValueObject {
-	return typeof value === 'object' && value !== null && !Array.isArray(value);
+	return typeof value === 'object' && value !== null && !Array.isArray(value) && !(value instanceof Number);
 }
 
 /** jq's truth: everything but `null` and `false`. */
@@ -74,9 +86,13 @@ function replacer(this: unknown, _key: string, value: unknown): unknown {
 	return value;
 }
 
-export function fromjson(text: string): Value {
+/** A JSON reviver that also sees the source text of each primitive, as Node's does. */
+export type Reviver =
+	(this: unknown, key: string, value: unknown, context: { readonly source?: string }) => unknown;
+
+export function fromjson(text: string, reviver?: Reviver): Value {
 	try {
-		return JSON.parse(text) as Value;
+		return JSON.parse(text, reviver) as Value;
 	} catch (error) {
 		throw new JqError(`${(error as Error).message} (while parsing '${text}')`);
 	}
@@ -87,80 +103,35 @@ export function tostring(value: Value): string {
 	return typeof value === 'string' ? value : tojson(value);
 }
 
-const numberRegex = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
-const specialNumberRegex = /^-?(?:nan|infinity)$/i;
+const numberRegex = /^[+-]?(?:(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?|nan|infinity)$/i;
 
 export function tonumber(value: Value): number {
-	if (typeof value === 'number') {
+	if (isNumber(value)) {
 		return value;
-	} else if (typeof value === 'string' && (numberRegex.test(value) || specialNumberRegex.test(value))) {
-		return Number(value.replace(/nan$/i, 'NaN'));
+	} else if (typeof value === 'string' && numberRegex.test(value)) {
+		return Number(value);
 	}
 	throw new JqError(`${describe(value)} cannot be parsed as a number`);
 }
 
-const typeOrder: Readonly<Record<ValueType, number>> = { null: 0, boolean: 1, number: 2, string: 3, array: 4, object: 5 };
-
 /**
- * jq's total order: null < false < true < numbers < strings < arrays < objects. Strings compare by
- * UTF-16 code unit, arrays lexicographically, objects first by their sorted key sets then value by value.
- * NaN sorts below every number, including itself.
+ * JavaScript's ordering: strings against strings by code unit, and everything else by subtraction
+ * — NaN for a container, JavaScript's coercions otherwise. jq's total order is the jq runtime's.
  */
 export function compare(left: Value, right: Value): number {
-	if (left === right) {
-		return 0;
+	if (typeof left === 'string' && typeof right === 'string') {
+		return compareStrings(left, right);
+	} else {
+		return toNumber(left) - toNumber(right);
 	}
-	const leftType = typeOf(left);
-	const rightType = typeOf(right);
-	if (leftType !== rightType) {
-		return typeOrder[leftType] - typeOrder[rightType];
-	}
-	switch (leftType) {
-		case 'null':
-			return 0;
-		case 'boolean':
-			return left === true ? 1 : -1;
-		case 'number': {
-			const lhs = left as number;
-			const rhs = right as number;
-			if (Number.isNaN(lhs)) {
-				return -1;
-			} else if (Number.isNaN(rhs) || lhs > rhs) {
-				return 1;
-			}
-			return lhs < rhs ? -1 : 0;
-		}
-		case 'string':
-			return compareStrings(left as string, right as string);
-		case 'array': {
-			const lhs = left as Value[];
-			const rhs = right as Value[];
-			const length = Math.min(lhs.length, rhs.length);
-			for (let ii = 0; ii < length; ++ii) {
-				const order = compare(lhs[ii]!, rhs[ii]!);
-				if (order !== 0) {
-					return order;
-				}
-			}
-			return lhs.length - rhs.length;
-		}
-		case 'object': {
-			const lhs = left as ValueObject;
-			const rhs = right as ValueObject;
-			const lhsKeys = Object.keys(lhs).sort(compareStrings);
-			const rhsKeys = Object.keys(rhs).sort(compareStrings);
-			const order = compare(lhsKeys, rhsKeys);
-			if (order !== 0) {
-				return order;
-			}
-			for (const key of lhsKeys) {
-				const order = compare(lhs[key]!, rhs[key]!);
-				if (order !== 0) {
-					return order;
-				}
-			}
-			return 0;
-		}
+}
+
+/** A value as subtraction would take it: a container has no number to it — and no prototype to coerce with, `Number` would throw. */
+function toNumber(value: Value): number {
+	if (typeof value !== 'object' || value instanceof Number) {
+		return Number(value);
+	} else {
+		return NaN;
 	}
 }
 
@@ -172,10 +143,14 @@ export function compareStrings(left: string, right: string): number {
 	}
 }
 
-/** Deep equality. Numbers compare as numbers, so `nan == nan` is false and `-0 == 0` is true. */
+/** Deep equality. Numbers compare as numbers, boxed or not, so `nan == nan` is false and `-0 == 0` is true. */
 export function equal(left: Value, right: Value): boolean {
 	if (left === right) {
 		return true;
+	} else if (isNumber(left)) {
+		return isNumber(right) && Number(left) === Number(right);
+	} else if (isNumber(right)) {
+		return false;
 	} else if (typeof left !== 'object' || typeof right !== 'object' || left === null || right === null) {
 		return false;
 	} else if (Array.isArray(left)) {

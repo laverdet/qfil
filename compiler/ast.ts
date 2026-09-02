@@ -52,6 +52,8 @@ export interface RecurseAll {
 export interface Literal {
 	readonly type: 'literal';
 	readonly value: Scalar;
+	/** A number as it was spelled, for a runtime that keeps that. */
+	readonly text?: string;
 }
 
 /**
