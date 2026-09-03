@@ -10,6 +10,8 @@ import * as util from 'node:util';
 import { CompileError } from 'jssq/compiler/filter.js';
 import { ParseError } from 'jssq/compiler/parser.js';
 import { compile } from 'jssq/index.js';
+import { runtime as fsRuntime } from 'jssq/runtime/fs/runtime.js';
+import { entry } from 'jssq/runtime/fs/value.js';
 import { lib as jqLib } from 'jssq/runtime/jq/index.js';
 import { runtime as jqRuntime } from 'jssq/runtime/jq/runtime.js';
 import { fromjson as jqFromjson } from 'jssq/runtime/jq/value.js';
@@ -30,14 +32,16 @@ const USAGE = `usage: jssq [options] <filter> [file...]
   -e, --exit-status      exit 1 when the last output is false or null, 4 when there is none
       --arg <name> <value>     bind $name to a string
       --argjson <name> <json>  bind $name to a JSON value
-      --runtime <js|jq>  JavaScript's numbers and order (default), or jq's
+      --runtime <js|jq|fs>  JavaScript's numbers and order (default), jq's, or the
+                         filesystem: each file argument is a root path, \`.\` when none
   -h, --help
 `;
 
-/** The runtimes a filter can run with, each with how it reads JSON. */
-const flavours: Readonly<Record<string, { readonly options: RunOptions; readonly parse: (text: string) => Value }>> = {
+/** The runtimes a filter can run with, each with how it reads JSON; `paths` reads file arguments as root paths instead. */
+const flavours: Readonly<Record<string, { readonly options: RunOptions; readonly parse: (text: string) => Value; readonly paths?: boolean }>> = {
 	js: { options: {}, parse: text => JSON.parse(text) as Value },
 	jq: { options: { runtime: jqRuntime, lib: jqLib }, parse: jqFromjson },
+	fs: { options: { runtime: fsRuntime }, parse: text => JSON.parse(text) as Value, paths: true },
 };
 
 /** Splits a text holding any number of JSON values, whitespace-separated, into the values. */
@@ -201,6 +205,12 @@ export function main(argv: readonly string[]): number {
 	}
 	// Inputs are read when something first asks for one, so that `-n` without `input` reads nothing
 	const inputs = function*(): Iterable<Value> {
+		if (flavour.paths === true) {
+			for (const root of files.length === 0 ? [ '.' ] : files) {
+				yield entry(root);
+			}
+			return;
+		}
 		const text = files.length === 0 ? readStdin() : files.map(file => fs.readFileSync(file, 'utf8')).join('\n');
 		if (flags['raw-input'] === true) {
 			if (flags.slurp === true) {

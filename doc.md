@@ -157,6 +157,20 @@ stream itself — `limit`, `first`, a filter parameter's closure — rejects an 
 compile time rather than mistaking an `Await` for a value at runtime; `render.filter` is the
 opt-in the task-aware constructs use.
 
+### The filesystem runtime
+
+A proof that a runtime really is just a meaning for the syntax: `runtime/fs` queries the
+filesystem. An entry — a file, a directory — is a plain value of its stat (`path`, `name`,
+`type`, `size`, `mtime`) with a brand the types cannot spell, so indexing, `select`, `sort_by`
+and printing need nothing new; only traversal is overridden — `.[]` of a directory is its
+entries, in name order, and `..` is the entry and everything beneath it, links not followed. A
+failure down there is a `JqError`, so the program's own `try` applies. `--runtime fs` takes each
+file argument as a root path (`.` when none):
+
+    jssq --runtime fs '[.[] | select(.type == "file") | .size] | add'
+    jssq --runtime fs '[.. | select(.name | test("\\.ts$")) | .path]' src
+    jssq --runtime fs '[.. | select(.type == "file")] | sort_by(.mtime) | last | .path'
+
 ### Tail calls
 
 A recursive call in tail position takes no stack frame: it comes to a `Bounce` (one value) or
@@ -190,5 +204,7 @@ only calls into a recursion pay for any of this; everything else compiles as bef
 - `runtime/js/value.ts` — comparison, equality and JSON conversion over the contract's values.
 - `runtime/jq/` — jq's numbers and order: spelled numbers as boxed `Number`s, canonical spelling,
   jq's total order, and the runtime and library laid over the JavaScript ones.
+- `runtime/fs/` — the filesystem as values: branded stat objects, and traversal (`.[]`, `..`)
+  laid over the JavaScript runtime.
 - `index.ts` — `compile`, `run`, `parse`; `bin/jssq.ts` — the `jssq` binary.
 - `jssq.test.ts` — the differential suite against the `jq` binary.

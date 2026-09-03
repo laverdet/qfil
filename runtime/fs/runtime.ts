@@ -1,0 +1,40 @@
+/**
+ * A runtime that reads the filesystem: the JavaScript runtime with traversal laid over it. `.[]`
+ * of a directory is its entries and `..` is the entry and everything beneath it; an entry is a
+ * plain value, so indexing, `select`, ordering and printing need nothing new, and data that is
+ * not an entry keeps its JavaScript meaning. The input is an entry, from `entry(path)`.
+ */
+import type { Runtime, Value } from '#/compiler/filter.js';
+import { children, isEntry, walk } from './value.js';
+import { combineStreams } from '#/compiler/filter.js';
+import { iterate, iterateOptional, recurse } from '#/runtime/js/intrinsics.js';
+import { runtime as js } from '#/runtime/js/runtime.js';
+
+/** `.[]`: a directory's entries; anything else as JavaScript has it. */
+function iterated(value: Value, otherwise: (value: Value) => Iterable<Value>): Iterable<Value> {
+	return isEntry(value) && value.type === 'directory' ? children(value) : otherwise(value);
+}
+
+export const runtime: Runtime = {
+	...js,
+	iterate: {
+		...js.iterate,
+		value: (node, render) => combineStreams([ render.filter(node.target) ], ([ value ]) => iterated(value!, iterate)),
+	},
+	recurse: {
+		...js.recurse,
+		value: () => function*(input) {
+			yield* isEntry(input) ? walk(input) : recurse(input);
+		},
+	},
+	try: {
+		...js.try,
+		value: (node, render) => {
+			if (node.handler === null && node.body.type === 'iterate') {
+				// `.[]?`, as the JavaScript runtime special-cases it, over directories too
+				return combineStreams([ render.filter(node.body.target) ], ([ value ]) => iterated(value!, iterateOptional));
+			}
+			return js.try.value(node, render);
+		},
+	},
+};
