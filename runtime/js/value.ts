@@ -86,13 +86,9 @@ function replacer(this: unknown, _key: string, value: unknown): unknown {
 	return value;
 }
 
-/** A JSON reviver that also sees the source text of each primitive, as Node's does. */
-type Reviver =
-	(this: unknown, key: string, value: unknown, context: { readonly source?: string }) => unknown;
-
-export function fromjson(text: string, reviver?: Reviver): Value {
+export function fromjson(text: string): Value {
 	try {
-		return JSON.parse(text, reviver) as Value;
+		return JSON.parse(text) as Value;
 	} catch (error) {
 		throw new JqError(`${(error as Error).message} (while parsing '${text}')`);
 	}

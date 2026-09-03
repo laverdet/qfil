@@ -601,6 +601,14 @@ agreeText('jq runtime: numbers keep their spelling', [
 	[ '(.b | tojson), keys, to_entries', '{"b": 1E2, "a": 1.0}' ],
 	[ '.[] | select(. > 1.5)', '[1.10, 2.50, 3]' ],
 	[ 'to_entries, (.a |= . * 2), del(.b)', '{"a": 1.50, "b": 2.0}' ],
+	// The hand-rolled parser: escapes, -0, duplicate keys, and rejected texts
+	[ '.', '"a\\u00e9\\n\\t\\"\\\\\\/\\ud83d\\ude00b"' ],
+	[ '.', '-0' ],
+	[ 'tojson', '{"a": 1, "a": 2.000}' ],
+	[ '.[] | try fromjson catch "E"', '["1 2","[1,","[1,]","{\\"a\\":1,}","{a:1}","{\\"a\\"}","\\"\\\\z\\"","\\"\\\\u12\\""," 7 ","[]","{}","1E5","-0","01","00","-01","007","01.5","00.5",".5","5.","1.","+1","+.5","-.5","1.e2",".5e1","5.e3","1e05","1e1000","-1e1000","nan","NaN","NAN","-nan","+nan","inf","INF","-inf","+inf","infinity","iNfInItY","-Infinity","nanx","infx","infinit","nan(12)",".","-","+","-.",".e2","1e","1e+","0x10","tru","nul"]' ],
+	[ '., . == .', 'nan' ],
+	[ '.', '01.500' ],
+	[ '.', '-Infinity' ],
 ], jqOptions, jqFromjson);
 
 void describe('cli', () => {

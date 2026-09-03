@@ -10,7 +10,7 @@
  */
 import type { Value, ValueObject } from '#/compiler/filter.js';
 import type { ValueType } from '#/runtime/js/value.js';
-import { compareStrings, fromjson as parseJson, tonumber as tonumberOf, typeOf } from '#/runtime/js/value.js';
+import { JqError, compareStrings, newObject, tonumber as tonumberOf, typeOf } from '#/runtime/js/value.js';
 
 /**
  * A number that remembers how it was spelled; a `Number` in every other respect. Only a decimal
@@ -71,9 +71,236 @@ export function tonumber(value: Value): Value {
 	return typeof value === 'string' && literalRegex.test(value) ? spelled(Number(value), value) : tonumberOf(value);
 }
 
-/** JSON with the spelling of each number kept. */
+/** The single-character escapes of a JSON string, keyed by the character after the backslash. */
+const escapes: Readonly<Record<string, string>> = {
+	'"': '"', '\\': '\\', '/': '/', b: '\b', f: '\f', n: '\n', r: '\r', t: '\t',
+};
+
+function isDigit(code: number): boolean {
+	return code >= 0x30 && code <= 0x39;
+}
+
+/**
+ * JSON with the spelling of each number kept, parsed by hand. `JSON.parse` with source access
+ * revives every value through a callback; reading the text directly costs a spelling check only
+ * where a number could spell more than it is, and makes each object without a prototype, as the
+ * runtime makes them.
+ */
 export function fromjson(text: string): Value {
-	return parseJson(text, (_key, value, context) => typeof value === 'number' && context.source !== undefined ? spelled(value, context.source) : value);
+	let at = 0;
+	const result = parse();
+	space();
+	if (at < text.length) {
+		throw failure('Unexpected trailing characters');
+	}
+	return result;
+
+	function failure(reason: string): JqError {
+		return new JqError(`${reason} at position ${at} (while parsing '${text}')`);
+	}
+
+	function space(): void {
+		while (true) {
+			const code = text.charCodeAt(at);
+			if (code === 0x20 || code === 0x09 || code === 0x0a || code === 0x0d) {
+				++at;
+			} else {
+				return;
+			}
+		}
+	}
+
+	function parse(): Value {
+		space();
+		switch (text.charCodeAt(at)) {
+			case 0x7b: return object(); // {
+			case 0x5b: return array(); // [
+			case 0x22: return string(); // "
+			case 0x74: return keyword('true', true); // t
+			case 0x66: return keyword('false', false); // f
+			case 0x6e: return text.startsWith('null', at) ? keyword('null', null) : number(); // n
+			default: return number();
+		}
+	}
+
+	function keyword(name: string, value: Value): Value {
+		if (text.startsWith(name, at)) {
+			at += name.length;
+			return value;
+		}
+		throw failure('Unexpected token');
+	}
+
+	function object(): Value {
+		++at;
+		const result = newObject();
+		space();
+		if (text.charCodeAt(at) === 0x7d /* } */) {
+			++at;
+			return result;
+		}
+		while (true) {
+			space();
+			if (text.charCodeAt(at) !== 0x22 /* " */) {
+				throw failure('Expected string key');
+			}
+			const key = string();
+			space();
+			if (text.charCodeAt(at) !== 0x3a /* : */) {
+				throw failure("Expected ':'");
+			}
+			++at;
+			result[key] = parse();
+			space();
+			const code = text.charCodeAt(at);
+			if (code === 0x7d /* } */) {
+				++at;
+				return result;
+			} else if (code === 0x2c /* , */) {
+				++at;
+			} else {
+				throw failure("Expected ',' or '}'");
+			}
+		}
+	}
+
+	function array(): Value {
+		++at;
+		const result: Value[] = [];
+		space();
+		if (text.charCodeAt(at) === 0x5d /* ] */) {
+			++at;
+			return result;
+		}
+		while (true) {
+			result.push(parse());
+			space();
+			const code = text.charCodeAt(at);
+			if (code === 0x5d /* ] */) {
+				++at;
+				return result;
+			} else if (code === 0x2c /* , */) {
+				++at;
+			} else {
+				throw failure("Expected ',' or ']'");
+			}
+		}
+	}
+
+	function string(): string {
+		++at;
+		let result = '';
+		let chunk = at;
+		while (true) {
+			const code = text.charCodeAt(at);
+			if (code === 0x22 /* " */) {
+				result += text.slice(chunk, at);
+				++at;
+				return result;
+			} else if (code === 0x5c /* \ */) {
+				result += text.slice(chunk, at);
+				result += escape();
+				chunk = at;
+			} else if (code >= 0x20) {
+				++at;
+			} else if (Number.isNaN(code)) {
+				throw failure('Unterminated string');
+			} else {
+				throw failure('Unescaped control character');
+			}
+		}
+	}
+
+	function escape(): string {
+		const char = text[at + 1];
+		at += 2;
+		const known = char === undefined ? undefined : escapes[char];
+		if (known !== undefined) {
+			return known;
+		} else if (char === 'u') {
+			const hex = text.slice(at, at + 4);
+			if (/^[0-9A-Fa-f]{4}$/.test(hex)) {
+				at += 4;
+				return String.fromCharCode(parseInt(hex, 16));
+			}
+			throw failure('Invalid \\u escape');
+		} else {
+			throw failure('Invalid escape');
+		}
+	}
+
+	// Numbers are lenient, as jq's own scanner is: an optional `+` or `-`, then `nan`, `inf` or
+	// `infinity` in any case, or digits with leading zeros allowed and a decimal point needing a
+	// digit on one side only
+	function number(): Value {
+		const sign = text.charCodeAt(at);
+		const negative = sign === 0x2d; // -
+		if (negative || sign === 0x2b /* + */) {
+			++at;
+		}
+		const start = at;
+		const first = text.charCodeAt(at);
+		if (first === 0x6e /* n */ || first === 0x4e /* N */) {
+			return named('nan', NaN);
+		} else if (first === 0x69 /* i */ || first === 0x49 /* I */) {
+			const value = named('inf', negative ? -Infinity : Infinity);
+			if (text.slice(at, at + 5).toLowerCase() === 'inity') {
+				at += 5;
+			}
+			return value;
+		}
+		while (isDigit(text.charCodeAt(at))) {
+			++at;
+		}
+		const integer = at - start;
+		let plain = integer >= 1 && integer <= 15 && !(negative && first === 0x30);
+		if (text.charCodeAt(at) === 0x2e /* . */) {
+			plain = false;
+			++at;
+			while (isDigit(text.charCodeAt(at))) {
+				++at;
+			}
+			if (at - start === 1) {
+				// `5.` stands and `.5` stands; `.` alone does not
+				throw failure('Expected digit');
+			}
+		} else if (integer === 0) {
+			throw failure('Unexpected token');
+		}
+		const code = text.charCodeAt(at);
+		if (code === 0x65 /* e */ || code === 0x45 /* E */) {
+			plain = false;
+			++at;
+			const exponentSign = text.charCodeAt(at);
+			if (exponentSign === 0x2b /* + */ || exponentSign === 0x2d /* - */) {
+				++at;
+			}
+			if (!isDigit(text.charCodeAt(at))) {
+				throw failure('Expected digit');
+			}
+			do {
+				++at;
+			} while (isDigit(text.charCodeAt(at)));
+		}
+		// The source drops a `+`, which the canonical spelling never carries
+		const source = negative ? `-${text.slice(start, at)}` : text.slice(start, at);
+		if (plain) {
+			// An integer of no more than 15 digits is exactly its number and its canonical
+			// spelling is its `String`; only `-0` spells more than the number does
+			return Number(source);
+		} else {
+			return spelled(Number(source), source);
+		}
+	}
+
+	/** A named number — `nan`, `inf` — matched without case, as jq's scanner reads C doubles. */
+	function named(name: string, value: number): number {
+		if (text.slice(at, at + name.length).toLowerCase() === name) {
+			at += name.length;
+			return value;
+		}
+		throw failure('Unexpected token');
+	}
 }
 
 const typeOrder: Readonly<Record<ValueType, number>> = { null: 0, boolean: 1, number: 2, string: 3, array: 4, object: 5 };

@@ -135,7 +135,10 @@ copies each container the first time a path passes through it and writes in plac
 `runtime/jq` is the JavaScript runtime with what differs laid over it: a `literal` handler that
 keeps a number's spelling, a `negate` that keeps it too, `binary` over jq's total order, and the
 library with `sort` and its kin over that order (`ordered`) and `tonumber`/`fromjson` keeping
-spellings. A spelled number is a boxed `Number` that remembers its text, so JavaScript itself does
+spellings. `fromjson` — which also reads the jq flavour's input — is parsed by hand: numbers are
+scanned as leniently as jq's own scanner reads C doubles (`01`, `+1`, `5.`, `nan`, `Infinity` in
+any case), and a number that is already spelled canonically is never boxed. A spelled number is a
+boxed `Number` that remembers its text, so JavaScript itself does
 the unwrapping — arithmetic, comparison and indexing coerce it — and `JSON.stringify` writes the
 spelling through the box's own `toJSON`. The JavaScript runtime counts a boxed `Number` as a
 number (`isNumber`, `typeOf`, `equal`), a JavaScript-native courtesy; it never makes one.
