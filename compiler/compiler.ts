@@ -352,11 +352,13 @@ class Compiler {
 			case 'foreach':
 				return this.pathForeach(node, scope);
 			case 'variable': case 'break':
-				return this.invalid(this.value(node, scope));
+				return this.invalid(this.value(node, scope), node.at);
 			case 'identity': case 'recurse': case 'literal': case 'string': case 'format': case 'index': case 'slice': case 'iterate': case 'try':
 			case 'pipe': case 'comma': case 'binary': case 'and': case 'or': case 'alternative': case 'negate': case 'assign': case 'if': case 'loc': case 'array': case 'object': {
 				const handler = this.handler(node);
-				return handler.path === undefined ? this.invalid(handler.value(node, this.renderer(scope))) : handler.path(node, this.renderer(scope));
+				return handler.path === undefined
+					? this.invalid(handler.value(node, this.renderer(scope)), node.at)
+					: handler.path(node, this.renderer(scope));
 			}
 		}
 	}
@@ -370,8 +372,8 @@ class Compiler {
 
 	private renderer(scope: Scope, tail = false): Render {
 		return {
-			value: node => this.strict(this.value(node, scope)),
-			generator: node => this.strict(this.generator(node, scope)),
+			value: node => this.strict(this.value(node, scope), node.at),
+			generator: node => this.strict(this.generator(node, scope), node.at),
 			path: node => this.path(node, scope),
 			invalid: filter => this.invalid(filter),
 			filter: node => this.value(node, scope),
@@ -380,17 +382,17 @@ class Compiler {
 	}
 
 	/** Guards a place compiled to run a stream as plain values: a task there would leak its awaits. */
-	private strict<Fn extends Filter>(filter: Fn): Fn {
+	private strict<Fn extends Filter>(filter: Fn, at?: number): Fn {
 		if (isTask(filter)) {
-			throw new CompileError('a filter that awaits is not supported here');
+			throw this.error('a filter that awaits is not supported here', at);
 		}
 		return filter;
 	}
 
 	/** A filter that is not a path expression, as a path filter: each value it yields is the runtime's invalid path. */
-	private invalid(filter: Filter): PathFilter {
+	private invalid(filter: Filter, at?: number): PathFilter {
 		const { invalidPath } = this.rt;
-		const stream = generator(this.strict(filter));
+		const stream = generator(this.strict(filter, at));
 		return function*(_path, value, env) {
 			for (const output of stream(value, env)) {
 				yield invalidPath(output);
@@ -400,7 +402,10 @@ class Compiler {
 
 	// -- Names --
 
-	private error(message: string, at: number): CompileError {
+	private error(message: string, at: number | undefined): CompileError {
+		if (at === undefined) {
+			return new CompileError(message);
+		}
 		const line = this.source.slice(0, at).split('\n').length;
 		const column = at - this.source.lastIndexOf('\n', at - 1);
 		return new CompileError(`${message} at line ${line}, column ${column}`, at);
@@ -481,7 +486,7 @@ class Compiler {
 		const distance = scope.distance(binding.slot);
 		switch (binding.kind) {
 			case 'value':
-				return this.invalid(this.call(node, scope));
+				return this.invalid(this.call(node, scope), node.at);
 			case 'param':
 				return function*(path, value, env) {
 					const bound = lookup(env, distance) as BoundClosure;
@@ -717,7 +722,7 @@ class Compiler {
 		if (desugared !== node) {
 			return this.path(desugared, scope);
 		}
-		const sources = this.strict(this.generator(node.source, scope));
+		const sources = this.strict(this.generator(node.source, scope), node.source.at);
 		const inner = scope.withVariable(simplePattern(node.patterns)!.name);
 		const body = this.path(node.body, inner);
 		return function*(path, value, env) {
@@ -806,7 +811,7 @@ class Compiler {
 			return this.path(this.desugarFold(node), scope);
 		}
 		const inits = this.path(node.init, scope);
-		const sources = this.strict(this.generator(node.source, scope));
+		const sources = this.strict(this.generator(node.source, scope), node.source.at);
 		const updates = this.path(node.update, inner);
 		const { invalidPath } = this.rt;
 		return function*(path, value, env) {
@@ -839,7 +844,7 @@ class Compiler {
 			return this.path(this.desugarFold(node), scope);
 		}
 		const inits = this.path(node.init, scope);
-		const sources = this.strict(this.generator(node.source, scope));
+		const sources = this.strict(this.generator(node.source, scope), node.source.at);
 		const updates = this.path(node.update, inner);
 		const extracts = node.extract === null ? null : this.path(node.extract, inner);
 		return function*(path, value, env) {

@@ -788,6 +788,10 @@ void describe('filters that await', () => {
 			assert.throws(() => compile(filter, { lib: slowly }), CompileError, filter);
 		}
 	});
+	void it('locates the refusal', () => {
+		assert.throws(() => compile('.a = later(1)', { lib: slowly }), { message: 'a filter that awaits is not supported here at line 1, column 6' });
+		assert.throws(() => compile('path(later(.a) as $x | .a)', { lib: slowly }), { message: 'a filter that awaits is not supported here at line 1, column 6' });
+	});
 });
 
 /** Tail calls: a recursive call in tail position runs on one frame, not the JavaScript stack. */

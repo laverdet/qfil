@@ -80,7 +80,7 @@ class Parser {
 		const left = this.noComma ? this.alternative() : this.comma();
 		if (this.peekOperator() === '|') {
 			++this.index;
-			return { type: 'pipe', left, right: this.pipe() };
+			return { type: 'pipe', left, right: this.pipe(), at: left.at };
 		}
 		return left;
 	}
@@ -90,7 +90,7 @@ class Parser {
 		let node = this.binding();
 		while (this.peekOperator() === ',') {
 			++this.index;
-			node = { type: 'comma', left: node, right: this.binding() };
+			node = { type: 'comma', left: node, right: this.binding(), at: node.at };
 		}
 		return node;
 	}
@@ -103,7 +103,7 @@ class Parser {
 		if (this.acceptKeyword('as')) {
 			const patterns = this.patterns();
 			this.expect('|');
-			return { type: 'bind', source, patterns, body: this.pipe() };
+			return { type: 'bind', source, patterns, body: this.pipe(), at: source.at };
 		}
 		return source;
 	}
@@ -113,7 +113,7 @@ class Parser {
 		const left = this.assign();
 		if (this.peekOperator() === '//') {
 			this.index += 2;
-			return { type: 'alternative', left, right: this.alternative() };
+			return { type: 'alternative', left, right: this.alternative(), at: left.at };
 		}
 		return left;
 	}
@@ -124,7 +124,7 @@ class Parser {
 		const op = this.peekOperator();
 		if (op !== undefined && (assignOperators as readonly string[]).includes(op)) {
 			this.index += op.length;
-			return { type: 'assign', op: op as ast.AssignOperator, left, right: this.or() };
+			return { type: 'assign', op: op as ast.AssignOperator, left, right: this.or(), at: left.at };
 		}
 		return left;
 	}
@@ -133,7 +133,7 @@ class Parser {
 	private or(): ast.Node {
 		let node = this.and();
 		while (this.acceptKeyword('or')) {
-			node = { type: 'or', left: node, right: this.and() };
+			node = { type: 'or', left: node, right: this.and(), at: node.at };
 		}
 		return node;
 	}
@@ -142,7 +142,7 @@ class Parser {
 	private and(): ast.Node {
 		let node = this.comparison();
 		while (this.acceptKeyword('and')) {
-			node = { type: 'and', left: node, right: this.comparison() };
+			node = { type: 'and', left: node, right: this.comparison(), at: node.at };
 		}
 		return node;
 	}
@@ -153,7 +153,7 @@ class Parser {
 		const op = this.peekOperator();
 		if (op !== undefined && (comparisonOperators as readonly string[]).includes(op)) {
 			this.index += op.length;
-			return { type: 'binary', op: op as ast.BinaryOperator, left, right: this.sum() };
+			return { type: 'binary', op: op as ast.BinaryOperator, left, right: this.sum(), at: left.at };
 		}
 		return left;
 	}
@@ -165,7 +165,7 @@ class Parser {
 			const op = this.peekOperator();
 			if (op === '+' || op === '-') {
 				++this.index;
-				node = { type: 'binary', op, left: node, right: this.product() };
+				node = { type: 'binary', op, left: node, right: this.product(), at: node.at };
 			} else {
 				return node;
 			}
@@ -179,7 +179,7 @@ class Parser {
 			const op = this.peekOperator();
 			if (op === '*' || op === '/' || op === '%') {
 				++this.index;
-				node = { type: 'binary', op, left: node, right: this.unary() };
+				node = { type: 'binary', op, left: node, right: this.unary(), at: node.at };
 			} else {
 				return node;
 			}
@@ -189,13 +189,15 @@ class Parser {
 	// unary := '-' unary | 'try' unary ('catch' unary)? | postfix
 	// `try` binds tighter than every binary operator, as in jq: `try a + b` is `(try a) + b`.
 	private unary(): ast.Node {
+		this.skip();
+		const at = this.index;
 		if (this.peekOperator() === '-') {
 			++this.index;
-			return { type: 'negate', operand: this.unary() };
+			return { type: 'negate', operand: this.unary(), at };
 		} else if (this.acceptKeyword('try')) {
 			const body = this.unary();
 			const handler = this.acceptKeyword('catch') ? this.unary() : null;
-			return { type: 'try', body, handler };
+			return { type: 'try', body, handler, at };
 		}
 		return this.postfix();
 	}
@@ -211,10 +213,10 @@ class Parser {
 				const next = this.source.charCodeAt(this.index + 1);
 				if (isIdentifierStart(next)) {
 					++this.index;
-					node = { type: 'index', target: node, key: { type: 'literal', value: this.identifier() } };
+					node = { type: 'index', target: node, key: { type: 'literal', value: this.identifier() }, at: node.at };
 				} else if (next === 0x22 /* " */) {
 					++this.index;
-					node = { type: 'index', target: node, key: this.string(null) };
+					node = { type: 'index', target: node, key: this.string(null), at: node.at };
 				} else if (next === 0x5b /* [ */) {
 					this.index += 2;
 					node = this.bracket(node);
@@ -226,7 +228,7 @@ class Parser {
 				node = this.bracket(node);
 			} else if (this.peekOperator() === '?') {
 				++this.index;
-				node = { type: 'try', body: node, handler: null };
+				node = { type: 'try', body: node, handler: null, at: node.at };
 			} else {
 				break;
 			}
@@ -238,11 +240,11 @@ class Parser {
 	private bracket(target: ast.Node): ast.Node {
 		return this.delimited(() => {
 			if (this.accept(']')) {
-				return { type: 'iterate', target };
+				return { type: 'iterate', target, at: target.at };
 			} else if (this.accept(':')) {
 				const to = this.pipe();
 				this.expect(']');
-				return { type: 'slice', target, from: null, to };
+				return { type: 'slice', target, from: null, to, at: target.at };
 			}
 			const from = this.pipe();
 			if (this.accept(':')) {
@@ -251,10 +253,10 @@ class Parser {
 					this.expect(']');
 					return node;
 				}.call(this);
-				return { type: 'slice', target, from, to };
+				return { type: 'slice', target, from, to, at: target.at };
 			}
 			this.expect(']');
-			return { type: 'index', target, key: from };
+			return { type: 'index', target, key: from, at: target.at };
 		});
 	}
 
@@ -268,21 +270,21 @@ class Parser {
 				const next = source.charCodeAt(at + 1);
 				if (next === 0x2e) {
 					this.index += 2;
-					return { type: 'recurse' };
+					return { type: 'recurse', at };
 				} else if (isDigit(next)) {
 					return this.number();
 				} else if (isIdentifierStart(next)) {
 					++this.index;
-					return { type: 'index', target: { type: 'identity' }, key: { type: 'literal', value: this.identifier() } };
+					return { type: 'index', target: { type: 'identity', at }, key: { type: 'literal', value: this.identifier() }, at };
 				} else if (next === 0x22 /* " */) {
 					++this.index;
-					return { type: 'index', target: { type: 'identity' }, key: this.string(null) };
+					return { type: 'index', target: { type: 'identity', at }, key: this.string(null), at };
 				} else if (next === 0x5b /* [ */) {
 					this.index += 2;
-					return this.bracket({ type: 'identity' });
+					return this.bracket({ type: 'identity', at });
 				}
 				++this.index;
-				return { type: 'identity' };
+				return { type: 'identity', at };
 			}
 			case 0x22: // "
 				return this.string(null);
@@ -304,20 +306,20 @@ class Parser {
 			case 0x5b: { // [
 				++this.index;
 				if (this.accept(']')) {
-					return { type: 'array', body: null };
+					return { type: 'array', body: null, at };
 				}
 				const body = this.delimited(() => this.pipe());
 				this.expect(']');
-				return { type: 'array', body };
+				return { type: 'array', body, at };
 			}
 			case 0x7b: // {
 				++this.index;
-				return this.object();
+				return { ...this.object(), at };
 			case 0x24: { // $
 				++this.index;
 				const name = this.identifier();
 				if (name === '__loc__') {
-					return { type: 'loc', line: this.lineOf(at) };
+					return { type: 'loc', line: this.lineOf(at), at };
 				}
 				return { type: 'variable', name, at };
 			}
@@ -327,10 +329,10 @@ class Parser {
 		} else if (isIdentifierStart(code)) {
 			const name = this.identifier();
 			switch (name) {
-				case 'if': return this.if();
-				case 'reduce': return this.reduce();
-				case 'foreach': return this.foreach();
-				case 'label': return this.label();
+				case 'if': return { ...this.if(), at };
+				case 'reduce': return { ...this.reduce(), at };
+				case 'foreach': return { ...this.foreach(), at };
+				case 'label': return { ...this.label(), at };
 				case 'def': return this.def(at);
 				case 'break': {
 					this.expect('$');
@@ -356,15 +358,15 @@ class Parser {
 			return { type: 'call', name, args, at };
 		}
 		switch (name) {
-			case 'true': return { type: 'literal', value: true };
-			case 'false': return { type: 'literal', value: false };
-			case 'null': return { type: 'literal', value: null };
+			case 'true': return { type: 'literal', value: true, at };
+			case 'false': return { type: 'literal', value: false, at };
+			case 'null': return { type: 'literal', value: null, at };
 			default: return { type: 'call', name, args: [], at };
 		}
 	}
 
 	// if := 'if' pipe 'then' pipe ('elif' pipe 'then' pipe)* ('else' pipe)? 'end'
-	private if(): ast.Node {
+	private if(): ast.If {
 		return this.delimited(() => {
 			const condition = this.pipe();
 			this.expectKeyword('then');
@@ -386,7 +388,7 @@ class Parser {
 
 	// reduce := 'reduce' alternative 'as' patterns '(' pipe ';' pipe ')'
 	// The source is as wide as a binding's: `reduce .[] + 1 as $x (…)` folds over `.[] + 1`.
-	private reduce(): ast.Node {
+	private reduce(): ast.Reduce {
 		const source = this.alternative();
 		this.expectKeyword('as');
 		const patterns = this.patterns();
@@ -400,7 +402,7 @@ class Parser {
 	}
 
 	// foreach := 'foreach' alternative 'as' patterns '(' pipe ';' pipe (';' pipe)? ')'
-	private foreach(): ast.Node {
+	private foreach(): ast.Foreach {
 		const source = this.alternative();
 		this.expectKeyword('as');
 		const patterns = this.patterns();
@@ -414,7 +416,7 @@ class Parser {
 	}
 
 	// label := 'label' '$' IDENT '|' pipe
-	private label(): ast.Node {
+	private label(): ast.Label {
 		this.expect('$');
 		const name = this.identifier();
 		this.expect('|');
@@ -447,7 +449,7 @@ class Parser {
 	// object := '{' (entry (',' entry)*)? '}'
 	// entry := '$' IDENT (':' value)? | IDENT (':' value)? | string (':' value)? | '(' pipe ')' ':' value
 	// value := pipe, with `,` reserved for separating entries
-	private object(): ast.Node {
+	private object(): ast.ObjectCons {
 		const entries = this.delimited(() => {
 			if (this.peek('}')) {
 				return [];
@@ -613,16 +615,17 @@ class Parser {
 			parts.push(text);
 		}
 		if (format === null && parts.length === 1 && typeof parts[0] === 'string') {
-			return { type: 'literal', value: parts[0] };
+			return { type: 'literal', value: parts[0], at: start };
 		}
-		return { type: 'string', format, parts };
+		return { type: 'string', format, parts, at: start };
 	}
 
 	private number(): ast.Node {
+		const at = this.index;
 		const text = this.match(numberRegex) ?? (() => {
 			throw this.error('Expected number');
 		})();
-		return { type: 'literal', value: Number(text), text };
+		return { type: 'literal', value: Number(text), text, at };
 	}
 
 	private identifier(): string {

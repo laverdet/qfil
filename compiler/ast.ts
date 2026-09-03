@@ -1,13 +1,19 @@
 /**
  * The syntax tree of a jq filter, as `parse` (parser.ts) produces it and the compiler consumes it.
  *
- * Nodes are plain data. A node type that names something the program may fail to resolve — a
- * function, a variable, a label — carries `at`, the source offset it was parsed from, so the error
- * can say where.
+ * Nodes are plain data. Every node the parser makes carries `at`, the source offset it began at,
+ * so an error can say where; a node the compiler synthesizes for desugaring has none. A node type
+ * that names something the program may fail to resolve — a function, a variable, a label —
+ * requires it.
  */
 
 /** A scalar the source spells out directly. Arrays and objects are constructions, not literals. */
 export type Scalar = null | boolean | number | string;
+
+/** Where a node begins in the source; a node the compiler synthesizes for desugaring has none. */
+interface Syntax {
+	readonly at?: number | undefined;
+}
 
 export type Node =
 	Identity |
@@ -40,16 +46,16 @@ export type Node =
 	Break;
 
 /** `.` */
-export interface Identity {
+export interface Identity extends Syntax {
 	readonly type: 'identity';
 }
 
 /** `..` — every value reachable from the input, itself first. */
-export interface RecurseAll {
+export interface RecurseAll extends Syntax {
 	readonly type: 'recurse';
 }
 
-export interface Literal {
+export interface Literal extends Syntax {
 	readonly type: 'literal';
 	readonly value: Scalar;
 	/** A number as it was spelled, for a runtime that keeps that. */
@@ -60,28 +66,28 @@ export interface Literal {
  * A string with `\(…)` interpolations, or one under a format (`@base64 "…\(.)…"`). A string with
  * neither parses to a {@link Literal} instead. The format applies to each interpolated value.
  */
-export interface Str {
+export interface Str extends Syntax {
 	readonly type: 'string';
 	readonly format: string | null;
 	readonly parts: readonly (string | Node)[];
 }
 
 /** `@base64` and the like, as a filter of the input. */
-export interface Format {
+export interface Format extends Syntax {
 	readonly type: 'format';
 	readonly name: string;
 	readonly at: number;
 }
 
 /** `target.key`, `target[key]` — key is a string node for `.foo` and `."foo"`. */
-export interface Index {
+export interface Index extends Syntax {
 	readonly type: 'index';
 	readonly target: Node;
 	readonly key: Node;
 }
 
 /** `target[from:to]`; an omitted bound is null. */
-export interface Slice {
+export interface Slice extends Syntax {
 	readonly type: 'slice';
 	readonly target: Node;
 	readonly from: Node | null;
@@ -89,25 +95,25 @@ export interface Slice {
 }
 
 /** `target[]` */
-export interface Iterate {
+export interface Iterate extends Syntax {
 	readonly type: 'iterate';
 	readonly target: Node;
 }
 
 /** `try body catch handler`; `body?` is the same with no handler. */
-export interface Try {
+export interface Try extends Syntax {
 	readonly type: 'try';
 	readonly body: Node;
 	readonly handler: Node | null;
 }
 
-export interface Pipe {
+export interface Pipe extends Syntax {
 	readonly type: 'pipe';
 	readonly left: Node;
 	readonly right: Node;
 }
 
-export interface Comma {
+export interface Comma extends Syntax {
 	readonly type: 'comma';
 	readonly left: Node;
 	readonly right: Node;
@@ -115,7 +121,7 @@ export interface Comma {
 
 export type BinaryOperator = '+' | '-' | '*' | '/' | '%' | '==' | '!=' | '<' | '<=' | '>' | '>=';
 
-export interface Binary {
+export interface Binary extends Syntax {
 	readonly type: 'binary';
 	readonly op: BinaryOperator;
 	readonly left: Node;
@@ -123,27 +129,27 @@ export interface Binary {
 }
 
 /** `and` / `or` — short-circuiting, yielding booleans. */
-export interface Logical {
+export interface Logical extends Syntax {
 	readonly type: 'and' | 'or';
 	readonly left: Node;
 	readonly right: Node;
 }
 
 /** `left // right` */
-export interface Alternative {
+export interface Alternative extends Syntax {
 	readonly type: 'alternative';
 	readonly left: Node;
 	readonly right: Node;
 }
 
-export interface Negate {
+export interface Negate extends Syntax {
 	readonly type: 'negate';
 	readonly operand: Node;
 }
 
 export type AssignOperator = '=' | '|=' | '+=' | '-=' | '*=' | '/=' | '%=' | '//=';
 
-export interface Assign {
+export interface Assign extends Syntax {
 	readonly type: 'assign';
 	readonly op: AssignOperator;
 	readonly left: Node;
@@ -151,7 +157,7 @@ export interface Assign {
 }
 
 /** `if … then … else … end`; `elif` chains parse to nested ifs, and a missing `else` is null. */
-export interface If {
+export interface If extends Syntax {
 	readonly type: 'if';
 	readonly condition: Node;
 	readonly then: Node;
@@ -159,7 +165,7 @@ export interface If {
 }
 
 /** `reduce source as pattern ?// pattern … (init; update)` */
-export interface Reduce {
+export interface Reduce extends Syntax {
 	readonly type: 'reduce';
 	readonly source: Node;
 	readonly patterns: readonly Pattern[];
@@ -168,7 +174,7 @@ export interface Reduce {
 }
 
 /** `foreach source as pattern ?// pattern … (init; update; extract)` */
-export interface Foreach {
+export interface Foreach extends Syntax {
 	readonly type: 'foreach';
 	readonly source: Node;
 	readonly patterns: readonly Pattern[];
@@ -178,7 +184,7 @@ export interface Foreach {
 }
 
 /** `source as pattern ?// pattern … | body` */
-export interface Bind {
+export interface Bind extends Syntax {
 	readonly type: 'bind';
 	readonly source: Node;
 	readonly patterns: readonly Pattern[];
@@ -186,7 +192,7 @@ export interface Bind {
 }
 
 /** `def name(params): body; rest` */
-export interface Def {
+export interface Def extends Syntax {
 	readonly type: 'def';
 	readonly name: string;
 	readonly params: readonly Param[];
@@ -201,32 +207,32 @@ export interface Param {
 	readonly value: boolean;
 }
 
-export interface Call {
+export interface Call extends Syntax {
 	readonly type: 'call';
 	readonly name: string;
 	readonly args: readonly Node[];
 	readonly at: number;
 }
 
-export interface Variable {
+export interface Variable extends Syntax {
 	readonly type: 'variable';
 	readonly name: string;
 	readonly at: number;
 }
 
 /** `$__loc__` */
-export interface Loc {
+export interface Loc extends Syntax {
 	readonly type: 'loc';
 	readonly line: number;
 }
 
 /** `[body]`; `[]` has a null body. */
-export interface ArrayCons {
+export interface ArrayCons extends Syntax {
 	readonly type: 'array';
 	readonly body: Node | null;
 }
 
-export interface ObjectCons {
+export interface ObjectCons extends Syntax {
 	readonly type: 'object';
 	readonly entries: readonly ObjectEntry[];
 }
@@ -240,13 +246,13 @@ export interface ObjectEntry {
 	readonly value: Node | null;
 }
 
-export interface Label {
+export interface Label extends Syntax {
 	readonly type: 'label';
 	readonly name: string;
 	readonly body: Node;
 }
 
-export interface Break {
+export interface Break extends Syntax {
 	readonly type: 'break';
 	readonly name: string;
 	readonly at: number;
