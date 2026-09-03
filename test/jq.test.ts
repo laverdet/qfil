@@ -58,6 +58,9 @@ agreeText('jq runtime: numbers keep their spelling', [
 	[ '., . == .', 'nan' ],
 	[ '.', '01.500' ],
 	[ '.', '-Infinity' ],
+	// The prelude's definitions run under jq's numbers and order
+	[ 'map_values(.), (.a | abs)', '{"a": -1.500}' ],
+	[ '[.[] | abs]', '[-2.000, 1.10e1]' ],
 ], jqOptions, jqFromjson);
 
 describe('cli', () => {

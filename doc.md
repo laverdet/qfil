@@ -185,6 +185,18 @@ bodies run beyond the one whose turn it is, so a consumer that stops early leave
 source unread. What a body ahead of its turn does, it does ahead of where a serial run would have
 it — the promises it starts, the inputs it reads — which is the point.
 
+### The prelude
+
+Builtins that the language can define are defined in the language: `Runtime.prelude` is a
+function returning parsed definitions — `once(() => definitions(source))`, so the source is read
+when a program first compiles against it and never again — `abs`, `map_values`, `paths(f)`, `any`/`all`, `IN`/`INDEX`, `capture`,
+`scan`, the type filters — spliced in scope of every program compiled with that runtime, exactly
+as if the program began with them; its own definitions shadow them as inner scopes do. The source
+is parsed once per process, and a definition's body is rendered only when a program first calls
+it, so an unused builtin costs its binding alone. A runtime laid over another inherits its prelude
+by the same spread as everything else, and the definitions take on the new runtime's semantics
+unrewritten: `abs` compares with jq's order under the jq runtime because `<` does.
+
 ### The filesystem runtime
 
 A proof that a runtime really is just a meaning for the syntax: `runtime/fs` queries the
@@ -227,7 +239,8 @@ only calls into a recursion pay for any of this; everything else compiles as bef
 - `runtime/js/runtime.ts` — the JavaScript runtime: a handler per kind of node, jq's semantics in
   JavaScript, and `invalidPath`, what a value is where a path expression was needed.
 - `runtime/js/index.ts` — the JavaScript library, keyed by name: the core functions, assembled
-  with `strings.ts`, `math.ts` and `regex.ts` over `library.ts`, what a function is built from.
+  with `strings.ts`, `math.ts` and `regex.ts` over `library.ts`, what a function is built from;
+  `prelude.ts` — the builtins defined in the language itself.
 - `runtime/js/intrinsics.ts` — the operations on values: indexing, arithmetic, paths, the
   `Editor`, formats.
 - `runtime/js/value.ts` — comparison, equality and JSON conversion over the contract's values.

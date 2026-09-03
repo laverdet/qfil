@@ -303,7 +303,11 @@ export interface Program {
 }
 
 export function instantiate(source: string, program: ast.Node, runtime: Runtime, lib: Lib, ctx: Context): Program {
-	return new Compiler(source, runtime, lib, ctx).program(program);
+	// The prelude's definitions enclose the program — the program's own shadow them — and their
+	// bodies render only on first call, so an unused definition costs its binding alone
+	const defs = runtime.prelude?.() ?? [];
+	const whole = defs.reduceRight<ast.Node>((rest, def) => ({ ...def, rest }), program);
+	return new Compiler(source, runtime, lib, ctx).program(whole);
 }
 
 class Compiler {
@@ -822,15 +826,20 @@ class Compiler {
 		binding.render = renderBody;
 		binding.renderPath = renderPath;
 		const base = '0'.repeat(filterParams.length);
-		const value = renderBody(base);
+		const valueOf = (params: string): Filter => this.variant(binding, params).value ?? function(): never {
+			throw new Error('Impossible: an unrendered variant');
+		}();
 		const pathOf = (params: string): PathFilter => this.pathVariant(binding, params).path ?? function(): never {
 			throw new Error('Impossible: an unrendered path variant');
 		}();
+		let value: Filter | undefined;
 		const definition: Definition = {
-			value,
-			variant: params => this.variant(binding, params).value ?? function(): never {
-				throw new Error('Impossible: an unrendered variant');
-			}(),
+			// The body is rendered when a call first asks for it, which for an unused definition is never
+			get value() {
+				value ??= valueOf(base);
+				return value;
+			},
+			variant: valueOf,
 			// The path form of the body is rendered when a call in path mode first asks for it
 			get path() {
 				return pathOf(base);

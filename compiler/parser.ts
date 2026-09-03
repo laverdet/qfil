@@ -735,3 +735,17 @@ class Parser {
 		return new ParseError(`${message} at line ${line}, column ${column}`);
 	}
 }
+
+/** Parses a source of definitions alone, as a runtime's prelude is written. */
+export function definitions(source: string): readonly ast.Def[] {
+	const defs: ast.Def[] = [];
+	let node = parse(`${source}\n.`);
+	while (node.type === 'def') {
+		defs.push(node);
+		node = node.rest;
+	}
+	if (node.type !== 'identity') {
+		throw new ParseError('A prelude is definitions only');
+	}
+	return defs;
+}

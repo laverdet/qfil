@@ -8,6 +8,7 @@
 import type * as ast from '#/compiler/ast.js';
 import type { Env, Filter, Handler, Path, PathFilter, Render, Resumed, Runtime, Stream, Value } from '#/compiler/filter.js';
 import * as intrinsics from './intrinsics.js';
+import { prelude } from './prelude.js';
 import { JqError, compare, equal, newObject, tostring, truthy } from './value.js';
 import { CompileError, abreast, combine, combineStreams, each, feed, firstOf, generator, isStream, isTask, over, task } from '#/compiler/filter.js';
 
@@ -84,6 +85,7 @@ function formatter(name: string): (value: Value) => string {
 /** jq's semantics over JavaScript's values: doubles, and JavaScript's order. */
 export const runtime: Runtime = {
 	invalidPath: intrinsics.invalidPath,
+	prelude,
 	identity: {
 		value: () => input => input,
 		path: () => function*(path, value) {

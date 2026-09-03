@@ -45,6 +45,12 @@ export function lookup(env: Env, distance: number): unknown {
 	return frame.value;
 }
 
+/** A function's result, computed on the first call and kept for every one after. */
+export function once<Type>(fn: () => Type): () => Type {
+	let value: Type | undefined;
+	return () => value ??= fn();
+}
+
 /** A filter of exactly one value. */
 export type Single = (input: Value, env: Env) => Value;
 /** A filter of any number of values: a generator function. */
@@ -86,6 +92,12 @@ type Handlers = { readonly [Type in Handled['type']]: Handler<Extract<ast.Node, 
 export interface Runtime extends Handlers {
 	/** Raised where a path expression was needed and a value came out instead: `path(1)`, `del(. + 1)`. */
 	readonly invalidPath: (value: Value) => never;
+	/**
+	 * Builtins written in the language itself, as a function of nothing returning their parsed
+	 * definitions — `once(() => definitions(source))` — in scope of every program compiled with
+	 * this runtime. A body is rendered only when a program first calls it.
+	 */
+	readonly prelude?: () => readonly ast.Def[];
 }
 
 /** What a program reaches at runtime besides its input. */
