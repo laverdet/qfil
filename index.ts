@@ -52,7 +52,7 @@ export interface StreamFilter {
 
 export type Filter = SingleFilter | StreamFilter;
 
-export function createContext(options: RunOptions = {}): Context {
+function createContext(options: RunOptions = {}): Context {
 	const inputs = (options.inputs ?? [])[Symbol.iterator]();
 	const env = options.env ?? process.env as Record<string, string>;
 	return {

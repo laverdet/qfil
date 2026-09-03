@@ -60,7 +60,7 @@ export function slice(value: Value, from: Value, to: Value): Value {
 }
 
 /** Resolves slice bounds against a length: the start floors, the end ceils, and both clamp. */
-export function sliceBounds(length: number, from: number | null, to: number | null): [ number, number ] {
+function sliceBounds(length: number, from: number | null, to: number | null): [ number, number ] {
 	const resolve = (bound: number) => {
 		const offset = bound < 0 ? length + bound : bound;
 		return Math.max(0, Math.min(length, offset));
@@ -456,36 +456,6 @@ export class Editor {
 		const result = setKey(value, key, updated);
 		this.owned.add(result as object);
 		return result;
-	}
-}
-
-/**
- * Runs `body` under `try`: its errors go to `handler` — or end the stream, when there is none —
- * while errors raised by whoever consumes the stream pass through untouched, since they happen
- * between one `next` and the following. That is what makes `try` cover only its own body.
- */
-export function *tryCatch<Type>(body: Iterable<Type>, handler: ((error: Value) => Iterable<Type>) | null): Iterable<Type> {
-	const iterator = body[Symbol.iterator]();
-	while (true) {
-		const next = function() {
-			try {
-				return iterator.next();
-			} catch (error) {
-				if (error instanceof JqError) {
-					return error;
-				}
-				throw error;
-			}
-		}();
-		if (next instanceof JqError) {
-			if (handler !== null) {
-				yield* handler(next.value);
-			}
-			return;
-		} else if (next.done === true) {
-			return;
-		}
-		yield next.value;
 	}
 }
 

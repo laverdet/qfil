@@ -87,7 +87,7 @@ function replacer(this: unknown, _key: string, value: unknown): unknown {
 }
 
 /** A JSON reviver that also sees the source text of each primitive, as Node's does. */
-export type Reviver =
+type Reviver =
 	(this: unknown, key: string, value: unknown, context: { readonly source?: string }) => unknown;
 
 export function fromjson(text: string, reviver?: Reviver): Value {

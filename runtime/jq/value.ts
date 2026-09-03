@@ -37,7 +37,7 @@ const decimalRegex = /^(-?)(\d*)(?:\.(\d*))?(?:[eE]([+-]?\d+))?$/;
  * and so jq, through decNumber — writes it: the digits as given, and a decimal point or an
  * exponent as the magnitude calls for. `1e2` is `1E+2`, `1.10e1` is `11.0`, `0.10` is itself.
  */
-export function canonical(text: string): string {
+function canonical(text: string): string {
 	const [ , sign, whole, fraction = '', exponent = '0' ] = decimalRegex.exec(text)!;
 	const digits = `${whole}${fraction}`.replace(/^0+(?=\d)/, '');
 	const scale = Number(exponent) - fraction.length;
