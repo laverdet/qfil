@@ -6,10 +6,10 @@
  * meaning for the same syntax.
  */
 import type * as ast from '#/compiler/ast.js';
-import type { Filter, Handler, Path, PathFilter, Render, Runtime, Value } from '#/compiler/filter.js';
+import type { Filter, Handler, Path, PathFilter, Render, Runtime, Stream, Value } from '#/compiler/filter.js';
 import * as intrinsics from './intrinsics.js';
 import { JqError, compare, equal, newObject, tostring, truthy } from './value.js';
-import { CompileError, combine, combineStreams, generator, isStream } from '#/compiler/filter.js';
+import { CompileError, combine, combineStreams, each, feed, generator, isStream, isTask, over, task } from '#/compiler/filter.js';
 
 export type Operators = Readonly<Record<ast.BinaryOperator, (left: Value, right: Value) => Value>>;
 
@@ -36,7 +36,7 @@ export function binary(ops: Operators): Handler<ast.Binary> {
 		// The right operand varies slowest, as jq has it
 		value: (node, render) => {
 			const op = ops[node.op];
-			return combine([ render.value(node.left), render.value(node.right) ], ([ left, right ]) => op(left!, right!), 'last');
+			return combine([ render.filter(node.left), render.filter(node.right) ], ([ left, right ]) => op(left!, right!), 'last');
 		},
 	};
 }
@@ -107,7 +107,7 @@ export const runtime: Runtime = {
 		// The last interpolation varies slowest, as jq has it
 		value: (node, render) => {
 			const convert = node.format === null ? tostring : formatter(node.format);
-			const parts = node.parts.map(part => typeof part === 'string' ? part : render.value(part));
+			const parts = node.parts.map(part => typeof part === 'string' ? part : render.filter(part));
 			const filters = parts.filter(part => typeof part !== 'string');
 			return combine(filters, values => {
 				let next = 0;
@@ -118,7 +118,7 @@ export const runtime: Runtime = {
 	index: {
 		// The key is evaluated first and varies slowest, as jq has it
 		value: (node, render) => {
-			const target = render.value(node.target);
+			const target = render.filter(node.target);
 			if (node.key.type === 'literal' && typeof node.key.value === 'string') {
 				const name = node.key.value;
 				return combine([ target ], ([ value ]) => intrinsics.field(value!, name));
@@ -126,19 +126,22 @@ export const runtime: Runtime = {
 				const index = node.key.value;
 				return combine([ target ], ([ value ]) => intrinsics.element(value!, index));
 			}
-			return combine([ target, render.value(node.key) ], ([ value, key ]) => intrinsics.index(value!, key!), 'last');
+			return combine([ target, render.filter(node.key) ], ([ value, key ]) => intrinsics.index(value!, key!), 'last');
 		},
 		path: (node, render) => pathThrough(render, node.target, node.key, intrinsics.index, key => key),
 	},
 	slice: {
 		// `from` varies slowest, then `to`, then the target, as jq has it
 		value: (node, render) => combine(
-			[ render.value(node.target), render.value(node.to ?? nullLiteral), render.value(node.from ?? nullLiteral) ],
+			[ render.filter(node.target), render.filter(node.to ?? nullLiteral), render.filter(node.from ?? nullLiteral) ],
 			([ value, to, from ]) => intrinsics.slice(value!, from!, to!),
 			'last',
 		),
 		path: (node, render) => {
-			const bounds = combineStreams([ render.value(node.to ?? nullLiteral), render.value(node.from ?? nullLiteral) ], function*([ to, from ]) {
+			const bounds = combineStreams([
+				render.value(node.to ?? nullLiteral),
+				render.value(node.from ?? nullLiteral),
+			], function*([ to, from ]) {
 				yield { __proto__: null, start: from!, end: to! };
 			}, 'last');
 			const targets = render.path(node.target);
@@ -153,7 +156,7 @@ export const runtime: Runtime = {
 		},
 	},
 	iterate: {
-		value: (node, render) => combineStreams([ render.value(node.target) ], ([ value ]) => intrinsics.iterate(value!)),
+		value: (node, render) => combineStreams([ render.filter(node.target) ], ([ value ]) => intrinsics.iterate(value!)),
 		path: (node, render) => {
 			const targets = render.path(node.target);
 			return function*(path, value, env) {
@@ -169,10 +172,10 @@ export const runtime: Runtime = {
 		value: (node, render) => {
 			if (node.handler === null && node.body.type === 'iterate') {
 				// `.[]?`: the only error is the iteration's own
-				return combineStreams([ render.value(node.body.target) ], ([ value ]) => intrinsics.iterateOptional(value!));
+				return combineStreams([ render.filter(node.body.target) ], ([ value ]) => intrinsics.iterateOptional(value!));
 			}
-			const body = render.value(node.body);
-			const handler = node.handler === null ? null : render.value(node.handler);
+			const body = render.filter(node.body);
+			const handler = node.handler === null ? null : render.filter(node.handler);
 			if (!isStream(body) && handler !== null && !isStream(handler)) {
 				return (input, env) => {
 					try {
@@ -188,7 +191,7 @@ export const runtime: Runtime = {
 			// Errors of the body, and only those: the consumer runs outside this frame
 			const stream = generator(body);
 			const recover = handler === null ? null : generator(handler);
-			return function*(input, env) {
+			const tried: Stream = function*(input, env) {
 				try {
 					yield* stream(input, env);
 				} catch (error) {
@@ -199,6 +202,7 @@ export const runtime: Runtime = {
 					}
 				}
 			};
+			return isTask(stream) || (recover !== null && isTask(recover)) ? task(tried) : tried;
 		},
 		path: (node, render) => {
 			if (node.handler === null && node.body.type === 'iterate') {
@@ -228,21 +232,22 @@ export const runtime: Runtime = {
 	},
 	pipe: {
 		value: (node, render) => {
-			const left = render.value(node.left);
-			const right = render.value(node.right);
+			const left = render.filter(node.left);
+			const right = render.filter(node.right);
 			if (!isStream(left)) {
-				return isStream(right)
-					? function*(input, env) {
-						yield* right(left(input, env), env);
-					}
-					: (input, env) => right(left(input, env), env);
+				if (!isStream(right)) {
+					return (input, env) => right(left(input, env), env);
+				}
+				const piped: Stream = function*(input, env) {
+					yield* right(left(input, env), env);
+				};
+				return isTask(right) ? task(piped) : piped;
 			}
 			const rights = generator(right);
-			return function*(input, env) {
-				for (const value of left(input, env)) {
-					yield* rights(value, env);
-				}
-			};
+			const piped = over(left, function*(value, _input, env) {
+				yield* rights(value, env);
+			});
+			return isTask(right) ? task(piped) : piped;
 		},
 		path: (node, render) => {
 			const left = render.path(node.left);
@@ -256,12 +261,13 @@ export const runtime: Runtime = {
 	},
 	comma: {
 		value: (node, render) => {
-			const left = generator(render.value(node.left));
-			const right = generator(render.value(node.right));
-			return function*(input, env) {
+			const left = generator(render.filter(node.left));
+			const right = generator(render.filter(node.right));
+			const both: Stream = function*(input, env) {
 				yield* left(input, env);
 				yield* right(input, env);
 			};
+			return isTask(left) || isTask(right) ? task(both) : both;
 		},
 		path: (node, render) => {
 			const left = render.path(node.left);
@@ -282,8 +288,23 @@ export const runtime: Runtime = {
 	alternative: {
 		// The truthy outputs of the left, or those of the right when there are none; errors are errors
 		value: (node, render) => {
-			const left = generator(render.value(node.left));
-			const right = generator(render.value(node.right));
+			const left = generator(render.filter(node.left));
+			const right = generator(render.filter(node.right));
+			if (isTask(left) || isTask(right)) {
+				return task(function*(input, env) {
+					let found = false;
+					yield* each(left(input, env), function*(value) {
+						if (truthy(value)) {
+							found = true;
+							yield value;
+						}
+					});
+					// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- set in the `each` body, which narrowing cannot see
+					if (!found) {
+						yield* right(input, env);
+					}
+				});
+			}
 			return function*(input, env) {
 				let found = false;
 				for (const value of left(input, env)) {
@@ -315,7 +336,7 @@ export const runtime: Runtime = {
 		},
 	},
 	negate: {
-		value: (node, render) => combine([ render.value(node.operand) ], ([ value ]) => intrinsics.negate(value!)),
+		value: (node, render) => combine([ render.filter(node.operand) ], ([ value ]) => intrinsics.negate(value!)),
 	},
 	assign: {
 		value: (node, render) => {
@@ -357,20 +378,18 @@ export const runtime: Runtime = {
 	},
 	if: {
 		value: (node, render) => {
-			const condition = render.value(node.condition);
-			const then = render.value(node.then);
-			const otherwise = node.else === null ? identityFilter : render.value(node.else);
+			const condition = render.filter(node.condition);
+			const then = render.filter(node.then);
+			const otherwise = node.else === null ? identityFilter : render.filter(node.else);
 			if (!isStream(condition) && !isStream(then) && !isStream(otherwise)) {
 				return (input, env) => truthy(condition(input, env)) ? then(input, env) : otherwise(input, env);
 			}
-			const conditions = generator(condition);
 			const thens = generator(then);
 			const otherwises = generator(otherwise);
-			return function*(input, env) {
-				for (const test of conditions(input, env)) {
-					yield* truthy(test) ? thens(input, env) : otherwises(input, env);
-				}
-			};
+			const branched = over(generator(condition), function*(test, input, env) {
+				yield* truthy(test) ? thens(input, env) : otherwises(input, env);
+			});
+			return isTask(thens) || isTask(otherwises) ? task(branched) : branched;
 		},
 		path: (node, render) => {
 			const conditions = render.generator(node.condition);
@@ -388,7 +407,14 @@ export const runtime: Runtime = {
 			if (node.body === null) {
 				return () => [];
 			}
-			const body = generator(render.value(node.body));
+			const body = generator(render.filter(node.body));
+			if (isTask(body)) {
+				return task(function*(input, env) {
+					const elements: Value[] = [];
+					yield* feed(body(input, env), value => elements.push(value));
+					yield elements;
+				});
+			}
 			return (input, env) => [ ...body(input, env) ];
 		},
 	},
@@ -396,9 +422,9 @@ export const runtime: Runtime = {
 		// Entries in order, the first varying slowest, each key before its value
 		value: (node, render) => {
 			const filters = node.entries.flatMap(entry => {
-				const key = render.value(entry.key);
+				const key = render.filter(entry.key);
 				if (entry.value !== null) {
-					return [ key, render.value(entry.value) ];
+					return [ key, render.filter(entry.value) ];
 				}
 				// `{a}` is `{a: .a}`; `{$x}` is `{x: $x}`, which the parser spells with a variable value
 				return [ key, combine([ key ], ([ name ], input) => intrinsics.index(input, name!)) ];
@@ -416,22 +442,20 @@ export const runtime: Runtime = {
 
 /** `and` / `or`: the left short-circuits, and each output of the right is a boolean. */
 function logical(node: ast.Logical, render: Render, short: boolean): Filter {
-	const left = render.value(node.left);
-	const right = render.value(node.right);
+	const left = render.filter(node.left);
+	const right = render.filter(node.right);
 	if (!isStream(left) && !isStream(right)) {
 		return (input, env) => truthy(left(input, env)) === short ? short : truthy(right(input, env));
 	}
-	const lefts = generator(left);
-	const rights = generator(right);
-	return function*(input, env) {
-		for (const value of lefts(input, env)) {
-			if (truthy(value) === short) {
-				yield short;
-			} else {
-				for (const other of rights(input, env)) {
-					yield truthy(other);
-				}
-			}
+	const rights = over(generator(right), function*(other) {
+		yield truthy(other);
+	});
+	const boths = over(generator(left), function*(value, input, env) {
+		if (truthy(value) === short) {
+			yield short;
+		} else {
+			yield* rights(input, env);
 		}
-	};
+	});
+	return isTask(rights) ? task(boths) : boths;
 }

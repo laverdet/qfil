@@ -34,7 +34,7 @@ export const runtime: Runtime = {
 		},
 	},
 	negate: {
-		value: (node, render) => combine([ render.value(node.operand) ], ([ value ]) => negate(value!)),
+		value: (node, render) => combine([ render.filter(node.operand) ], ([ value ]) => negate(value!)),
 	},
 	binary: binary(operators(compare)),
 };

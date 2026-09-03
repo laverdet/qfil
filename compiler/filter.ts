@@ -60,6 +60,8 @@ export interface Render {
 	readonly generator: (node: ast.Node) => Stream;
 	/** The node as a path expression. */
 	readonly path: (node: ast.Node) => PathFilter;
+	/** The node's filter whatever its shape — a task when it awaits, which `value` and `generator` refuse. */
+	readonly filter: (node: ast.Node) => Filter;
 	/** A filter that is not a path expression, as a path filter: each of its values is the runtime's invalid path. */
 	readonly invalid: (filter: Filter) => PathFilter;
 }
@@ -114,6 +116,150 @@ export class Break extends Error {
 		super('break');
 		this.label = label;
 	}
+}
+
+/**
+ * Yielded by a filter that awaits, among its values: an instruction to the driver at the very top
+ * to settle the promise and resume the generator with its value — or to throw its rejection back
+ * in, where the program's own `try` may catch it. The generator never touches the promise itself;
+ * every frame in between just passes this along, so nothing below the driver becomes async.
+ */
+export class Await {
+	readonly promise: Promise<Value>;
+
+	constructor(promise: Promise<Value>) {
+		this.promise = promise;
+	}
+}
+
+/** What resumes a task's yield: an `Await`'s settlement, and nothing after a plain value. */
+export type Resumed = Value | undefined;
+
+const taskShape: unique symbol = Symbol('jssq.task');
+
+/** Marks a stream as a task: one that may yield an `Await` among its values. */
+export function task<Fn extends Stream>(fn: Fn): Fn {
+	return Object.assign(fn, { [taskShape]: true });
+}
+
+/** Whether a filter may yield `Await`s, read off the function itself as `isStream` is. A task is always a stream. */
+export function isTask(fn: Filter | PathFilter): boolean {
+	return (fn as { readonly [taskShape]?: boolean })[taskShape] === true;
+}
+
+/**
+ * A stream's values inside a task: each one through `body`, whose own yields pass through, and
+ * each `Await` passed along to the driver — its resolution fed back into the stream, a rejection
+ * thrown into it. Returns how many values it saw, which is how a caller learns the stream was
+ * empty. This is the task-aware `for..of`; a loop that cannot meet an `Await` should stay a plain
+ * loop.
+ */
+export function *each<Item, Out>(iterable: Iterable<Item>, body: (item: Item) => Generator<Out, void, Resumed>): Generator<Out, number, Resumed> {
+	const iterator = iterable[Symbol.iterator]();
+	let seen = 0;
+	try {
+		let next = iterator.next();
+		while (next.done !== true) {
+			const item = next.value;
+			if (item instanceof Await) {
+				// An `Await` of the stream's own: forward it, and resume the stream with what the
+				// driver sends back. Only a settlement arrives here, so a rejection goes into the
+				// stream, not out of this frame.
+				let resolved;
+				try {
+					// A forwarded instruction is invisible to the types, as it is to every frame it passes
+					resolved = yield item as unknown as Out;
+				} catch (error) {
+					if (iterator.throw === undefined) {
+						throw error;
+					}
+					next = iterator.throw(error);
+					continue;
+				}
+				next = iterator.next(resolved);
+			} else {
+				seen += 1;
+				yield* body(item);
+				next = iterator.next();
+			}
+		}
+		return seen;
+	} finally {
+		iterator.return?.();
+	}
+}
+
+/** As `each`, for a body with nothing of its own to yield. */
+export function feed<Item>(iterable: Iterable<Item>, body: (item: Item) => void): Generator<never, number, Resumed> {
+	// eslint-disable-next-line require-yield -- forwarding `Await`s is all it yields
+	const wrap = function*(item: Item): Generator<never, void, Resumed> {
+		body(item);
+	};
+	return each(iterable, wrap);
+}
+
+/**
+ * `body` over each value of `stream`: a plain loop when the stream cannot await, `each` when it
+ * may. The result is a task only when the stream is one; a caller whose body awaits marks the
+ * result itself.
+ */
+export function over(stream: Stream, body: (value: Value, input: Value, env: Env) => Generator<Value, void, Resumed>): Stream {
+	if (isTask(stream)) {
+		return task(function*(input, env) {
+			yield* each(stream(input, env), value => body(value, input, env));
+		});
+	}
+	return function*(input, env) {
+		for (const value of stream(input, env)) {
+			yield* body(value, input, env);
+		}
+	};
+}
+
+/**
+ * Drives a stream of outputs, settling whatever it awaits: the values as an array when nothing
+ * did, a promise of them once something has. This is the only async frame there is; between
+ * settlements the program below runs synchronously.
+ */
+export function drive(outputs: Iterable<Value>): Value[] | Promise<Value[]> {
+	const iterator = outputs[Symbol.iterator]();
+	const results: Value[] = [];
+	// Collects values until the stream awaits or ends
+	const collect = (from: IteratorResult<Value>): IteratorResult<Value> => {
+		let next = from;
+		while (next.done !== true && !(next.value instanceof Await)) {
+			results.push(next.value);
+			next = iterator.next();
+		}
+		return next;
+	};
+	const paused = collect(iterator.next());
+	if (paused.done === true) {
+		return results;
+	}
+	return async function() {
+		let next: IteratorResult<Value> = paused;
+		while (next.done !== true) {
+			const waiting = next.value as unknown as Await;
+			// Resume with the value, or throw the rejection into the program; an error the program
+			// then raises must propagate out, not be thrown back in, so the step runs after the catch
+			const step = await async function(): Promise<() => IteratorResult<Value>> {
+				try {
+					const value = await waiting.promise;
+					return () => iterator.next(value);
+				} catch (error) {
+					return () => {
+						if (iterator.throw === undefined) {
+							throw error;
+						}
+						return iterator.throw(error);
+					};
+				}
+			}();
+			next = collect(step());
+		}
+		return results;
+	}();
 }
 
 /** A library function's path form, when it has one: `select`, `first`, `getpath`. */
@@ -186,23 +332,35 @@ export function pathCall(fn: LibFunction, ctx: Context, render: Render, args: re
 }
 
 /** Every combination of the streams' outputs, the first (or the last) varying slowest, as jq orders them. */
-export function *product(streams: readonly Stream[], input: Value, env: Env, slowest: 'first' | 'last'): Generator<Value[]> {
+export function *product(streams: readonly Stream[], input: Value, env: Env, slowest: 'first' | 'last'): Generator<Value[], void, Resumed> {
 	const order = streams.map((_stream, ii) => ii);
 	if (slowest === 'last') {
 		order.reverse();
 	}
 	const values: Value[] = new Array<Value>(streams.length);
-	const go = function*(depth: number): Generator<Value[]> {
-		if (depth === order.length) {
-			yield [ ...values ];
-			return;
+	const go = streams.some(isTask)
+		? function*(depth: number): Generator<Value[], void, Resumed> {
+			if (depth === order.length) {
+				yield [ ...values ];
+				return;
+			}
+			const ii = order[depth]!;
+			yield* each(streams[ii]!(input, env), function*(value) {
+				values[ii] = value;
+				yield* go(depth + 1);
+			});
 		}
-		const ii = order[depth]!;
-		for (const value of streams[ii]!(input, env)) {
-			values[ii] = value;
-			yield* go(depth + 1);
-		}
-	};
+		: function*(depth: number): Generator<Value[], void, Resumed> {
+			if (depth === order.length) {
+				yield [ ...values ];
+				return;
+			}
+			const ii = order[depth]!;
+			for (const value of streams[ii]!(input, env)) {
+				values[ii] = value;
+				yield* go(depth + 1);
+			}
+		};
 	yield* go(0);
 }
 
@@ -212,6 +370,13 @@ export function combine(filters: readonly Filter[], body: (values: Value[], inpu
 		return (input, env) => body(filters.map(filter => filter(input, env)), input, env);
 	}
 	const streams = filters.map(generator);
+	if (filters.some(isTask)) {
+		return task(function*(input, env) {
+			yield* each(product(streams, input, env, slowest), function*(values) {
+				yield body(values, input, env);
+			});
+		});
+	}
 	return function*(input, env) {
 		for (const values of product(streams, input, env, slowest)) {
 			yield body(values, input, env);
@@ -222,6 +387,13 @@ export function combine(filters: readonly Filter[], body: (values: Value[], inpu
 /** As `combine`, for a body that yields. */
 export function combineStreams(filters: readonly Filter[], body: (values: Value[], input: Value, env: Env) => Iterable<Value>, slowest: 'first' | 'last' = 'first'): Stream {
 	const streams = filters.map(generator);
+	if (filters.some(isTask)) {
+		return task(function*(input, env) {
+			yield* each(product(streams, input, env, slowest), function*(values) {
+				yield* body(values, input, env);
+			});
+		});
+	}
 	return function*(input, env) {
 		for (const values of product(streams, input, env, slowest)) {
 			yield* body(values, input, env);
@@ -231,12 +403,24 @@ export function combineStreams(filters: readonly Filter[], body: (values: Value[
 
 /** A library function of values: each argument evaluated, the call made once per combination. */
 export function values(render: Render, args: readonly ast.Node[], body: (input: Value, ...args: Value[]) => Value): Filter {
-	return combine(args.map(arg => render.value(arg)), (vals, input) => body(input, ...vals));
+	return combine(args.map(arg => render.filter(arg)), (vals, input) => body(input, ...vals));
 }
 
 /** As `values`, for a body that yields. */
 export function streams(render: Render, args: readonly ast.Node[], body: (input: Value, ...args: Value[]) => Iterable<Value>): Stream {
-	return combineStreams(args.map(arg => render.value(arg)), (vals, input) => body(input, ...vals));
+	return combineStreams(args.map(arg => render.filter(arg)), (vals, input) => body(input, ...vals));
+}
+
+/** As `values`, for a body that returns a promise: each call settled by the driver, out of frame. */
+export function promises(render: Render, args: readonly ast.Node[], body: (input: Value, ...args: Value[]) => Promise<Value>): Filter {
+	const streams = args.map(arg => generator(render.filter(arg)));
+	return task(function*(input, env) {
+		yield* each(product(streams, input, env, 'first'), function*(vals) {
+			// The driver resumes an `Await` with a value, whatever the types can spell of it
+			const value = yield new Await(body(input, ...vals)) as unknown as Value;
+			yield value as Value;
+		});
+	});
 }
 
 /** The literal a node spells out, if it is one; what a library function reads to do work up front. */

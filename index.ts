@@ -10,13 +10,14 @@
 import type { Context, Lib, Runtime, Value } from './compiler/filter.js';
 import * as process from 'node:process';
 import { instantiate } from './compiler/compiler.js';
+import { drive } from './compiler/filter.js';
 import { parse } from './compiler/parser.js';
 import { lib as defaultLib } from './runtime/js/index.js';
 import { runtime as defaultRuntime } from './runtime/js/runtime.js';
 import { JqError, tojson } from './runtime/js/value.js';
 
 export type { Context, Env, Filter as LibFilter, Handled, Handler, Lib, LibFunction, Path, PathFilter, Render, Runtime, Stream, Value, ValueObject } from './compiler/filter.js';
-export { Break, CompileError, combine, combineStreams, constant, generator, isStream, overload, pathForm, runtimePathFunction, streams, values } from './compiler/filter.js';
+export { Await, Break, CompileError, combine, combineStreams, constant, drive, each, feed, generator, isStream, isTask, over, overload, pathForm, promises, runtimePathFunction, streams, task, values } from './compiler/filter.js';
 export { ParseError, parse } from './compiler/parser.js';
 export { lib } from './runtime/js/index.js';
 export { runtime } from './runtime/js/runtime.js';
@@ -38,11 +39,14 @@ export interface RunOptions {
 
 export interface SingleFilter {
 	(input: Value): Value;
+	readonly awaits: false;
 	readonly stream: false;
 }
 
 export interface StreamFilter {
 	(input: Value): Iterable<Value>;
+	/** Whether the stream may yield `Await`s: one to run through `drive`, not a plain loop. */
+	readonly awaits: boolean;
 	readonly stream: true;
 }
 
@@ -77,11 +81,14 @@ export function createContext(options: RunOptions = {}): Context {
  */
 export function compile(source: string, options: RunOptions = {}): Filter {
 	const program = instantiate(source, parse(source), options.runtime ?? defaultRuntime, options.lib ?? defaultLib, createContext(options));
-	return Object.assign(program.filter, { stream: program.stream }) as Filter;
+	return Object.assign(program.filter, {
+		awaits: program.awaits,
+		stream: program.stream,
+	}) as Filter;
 }
 
-/** Runs a filter over one input, collecting every output. */
-export function run(source: string, input: Value, options: RunOptions = {}): Value[] {
+/** Runs a filter over one input, collecting every output: an array, or a promise of one when the filter awaits. */
+export function run(source: string, input: Value, options: RunOptions = {}): Value[] | Promise<Value[]> {
 	const filter = compile(source, options);
-	return filter.stream ? [ ...filter(input) ] : [ filter(input) ];
+	return drive(filter.stream ? filter(input) : [ filter(input) ]);
 }

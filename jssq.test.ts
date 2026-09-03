@@ -13,7 +13,7 @@ import { lib as jqLib } from './runtime/jq/index.js';
 import { runtime as jqRuntime } from './runtime/jq/runtime.js';
 import { fromjson as jqFromjson } from './runtime/jq/value.js';
 import { tojson } from './runtime/js/value.js';
-import { compile, constant, lib, overload, run, values } from './index.js';
+import { CompileError, JqError, compile, constant, lib, overload, promises, run, values } from './index.js';
 
 type Case = readonly [ filter: string, input?: Value, inputs?: readonly Value[] ];
 
@@ -630,7 +630,7 @@ void describe('compiled shape', () => {
 	void it('makes objects without a prototype', () => {
 		const filters = [ '{a: 1}', '{}', '{(.a.c | tostring): 1}', '. + {b: 2}', '.a.c = 1', '(.a.c = 1) | .a', 'to_entries[0]', 'del(.a.c) | .a', 'to_entries | from_entries', '{a: 1} * {a: {b: 2}}' ];
 		for (const filter of filters) {
-			const [ object ] = run(filter, { a: { c: 3 } });
+			const [ object ] = run(filter, { a: { c: 3 } }) as Value[];
 			assert.equal(Object.getPrototypeOf(object), null, filter);
 		}
 	});
@@ -667,5 +667,98 @@ void describe('compiled shape', () => {
 		assert.throws(() => compile('1 | foo'), { message: 'foo/0 is not defined at line 1, column 5' });
 		assert.throws(() => compile('$nope'), { message: '$nope is not defined at line 1, column 1' });
 		assert.throws(() => compile('1 +'), { message: /Unexpected end of input at line 1, column 4/ });
+	});
+});
+
+/** Filters that await: promise-returning library functions, settled by the driver out of frame. */
+void describe('filters that await', () => {
+	const slowly: Lib = {
+		...lib,
+		later: (render, arg) => promises(render, [ arg ], async (_input, value) => {
+			await new Promise<void>(resolve => {
+				setImmediate(resolve);
+			});
+			return value;
+		}),
+		broken: render => promises(render, [], async () => {
+			await new Promise<void>(resolve => {
+				setImmediate(resolve);
+			});
+			throw new JqError('broken');
+		}),
+		nasty: render => promises(render, [], async () => {
+			await new Promise<void>(resolve => {
+				setImmediate(resolve);
+			});
+			throw new TypeError('nope');
+		}),
+	};
+	const eventually = async (filter: string, input: Value = null): Promise<Value[]> => run(filter, input, { lib: slowly });
+
+	void it('returns an array when nothing awaited', () => {
+		const outputs = run('1, 2', null, { lib: slowly });
+		assert.ok(Array.isArray(outputs));
+		assert.deepEqual(outputs, [ 1, 2 ]);
+	});
+	void it('returns a promise once something does', async () => {
+		const outputs = run('later(1)', null, { lib: slowly });
+		assert.ok(outputs instanceof Promise);
+		assert.deepEqual(await outputs, [ 1 ]);
+	});
+	void it('says so on the compiled filter', () => {
+		assert.equal(compile('later(1)', { lib: slowly }).awaits, true);
+		assert.equal(compile('.[]', { lib: slowly }).awaits, false);
+	});
+	void it('awaits through the language', async () => {
+		const cases: readonly (readonly [ string, Value, Value[] ])[] = [
+			[ 'later(1)', null, [ 1 ] ],
+			[ 'later(later(2))', null, [ 2 ] ],
+			[ 'later(1) + later(2)', null, [ 3 ] ],
+			[ '-later(3)', null, [ -3 ] ],
+			[ '[.[] | later(. * 2)]', [ 1, 2, 3 ], [ [ 2, 4, 6 ] ] ],
+			[ 'later(1), 2, later(3)', null, [ 1, 2, 3 ] ],
+			[ '"got \\(later(42))"', null, [ 'got 42' ] ],
+			[ 'later({a: 1}) | .a', null, [ 1 ] ],
+			[ 'later([1, 2]) | .[]', null, [ 1, 2 ] ],
+			[ '{a: later(1), b: 2}', null, [ { a: 1, b: 2 } ] ],
+			[ 'later([3, 1, 2]) | sort', null, [ [ 1, 2, 3 ] ] ],
+			[ 'later(5) as $x | $x + 1', null, [ 6 ] ],
+			[ 'later([1, 2]) as [$x, $y] | $x + $y', null, [ 3 ] ],
+			[ 'if later(true) then "y" else "n" end', null, [ 'y' ] ],
+			[ 'later(false) // later(7)', null, [ 7 ] ],
+			[ 'later(true) and later(false)', null, [ false ] ],
+			[ 'reduce .[] as $x (0; later(. + $x))', [ 1, 2, 3 ], [ 6 ] ],
+			[ 'foreach .[] as $x (0; later(. + $x))', [ 1, 2, 3 ], [ 1, 3, 6 ] ],
+			[ 'foreach .[] as $x (0; . + $x; later(. * 10))', [ 1, 2 ], [ 10, 30 ] ],
+			[ 'def double: later(. * 2); .[] | double', [ 1, 2 ], [ 2, 4 ] ],
+			[ 'def f($x): $x + 1; f(later(1))', null, [ 2 ] ],
+			[ 'def count: if . > 0 then ., (later(. - 1) | count) else empty end; count', 3, [ 3, 2, 1 ] ],
+			[ 'label $out | later(1), break $out, 2', null, [ 1 ] ],
+			[ 'try broken catch .', null, [ 'broken' ] ],
+			[ '[(later(1), broken)?]', null, [ [ 1 ] ] ],
+		];
+		for (const [ filter, input, expected ] of cases) {
+			// Through JSON: the language's objects have no prototype, the expectations here do
+			assert.deepEqual(JSON.parse(tojson(await eventually(filter, input))), expected, filter);
+		}
+	});
+	void it('throws rejections into the program', async () => {
+		await assert.rejects(eventually('broken'), JqError);
+		// A rejection that is not the language's own error passes the language's `try` untouched
+		await assert.rejects(eventually('try nasty catch .'), TypeError);
+	});
+	void it('refuses a task where a plain stream was compiled', () => {
+		const refused = [
+			'limit(1; later(1))',
+			'first(later(1))',
+			'map(later(.))',
+			'sort_by(later(.))',
+			'def f(g): g; f(later(1))',
+			'path(later(.a))',
+			'.a = later(1)',
+		];
+		for (const filter of refused) {
+			assert.throws(() => compile(filter, { lib: slowly }), CompileError, filter);
+		}
 	});
 });

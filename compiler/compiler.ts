@@ -12,8 +12,8 @@
  * environment it was evaluated in, so it may refer to itself and to what enclosed it.
  */
 import type * as ast from './ast.js';
-import type { Context, Env, Filter, Handled, Handler, Lib, LibFunction, PathFilter, Render, Runtime, Single, Stream, Value } from './filter.js';
-import { Break, CompileError, allSingle, generator, isStream, lookup, pathCall, product, push } from './filter.js';
+import type { Context, Env, Filter, Handled, Handler, Lib, LibFunction, PathFilter, Render, Resumed, Runtime, Single, Stream, Value } from './filter.js';
+import { Break, CompileError, allSingle, each, feed, generator, isStream, isTask, lookup, over, pathCall, product, push, task } from './filter.js';
 
 /** A definition: the filters of its body, called with its own frame and its parameters pushed on the environment it closed over. */
 interface Definition {
@@ -42,6 +42,8 @@ interface BoundClosure {
 interface Callee {
 	(bound: Bound, env: Env, input: Value): Iterable<Env>;
 	readonly streams: boolean;
+	/** Whether a value argument awaits, making the environments a task's yields. */
+	readonly task: boolean;
 }
 
 /** A definition as the compiler sees it: where its frame sits, and the shape of a call to it. */
@@ -50,7 +52,7 @@ interface DefBinding {
 	readonly slot: number;
 	readonly def: ast.Def;
 	/** Undefined while the body is rendered; a self-call then assumes a single value and says so. */
-	shape: 'single' | 'stream' | undefined;
+	shape: 'single' | 'stream' | 'task' | undefined;
 	assumed: boolean;
 }
 
@@ -134,45 +136,53 @@ function simplePattern(patterns: readonly ast.Pattern[]): ast.VariablePattern | 
 	return patterns.length === 1 && pattern.type === 'variable' ? pattern : undefined;
 }
 
+/** The shape of a rendered filter: what a self-call must be compiled to match. */
+function shapeOf(filter: Filter): 'single' | 'stream' | 'task' {
+	if (isTask(filter)) {
+		return 'task';
+	} else if (isStream(filter)) {
+		return 'stream';
+	}
+	return 'single';
+}
+
 /**
  * `reduce`, over whatever its state is — a value, or a path and the value at it. `items` runs
  * afresh for each initial state; each item is pushed on the environment the update runs in, and
  * the update's last output is the next state, `none` when it has none.
  */
-function *reduce<State>(inits: Iterable<State>, items: () => Iterable<Value>, env: Env, update: (state: State, bound: Env) => Iterable<State>, none: () => State): Generator<State> {
-	for (const init of inits) {
+function *reduce<State>(inits: Iterable<State>, items: () => Iterable<Value>, env: Env, update: (state: State, bound: Env) => Iterable<State>, none: () => State): Generator<State, void, Resumed> {
+	yield* each(inits, function*(init) {
 		let state = init;
-		for (const item of items()) {
+		yield* each(items(), function*(item) {
 			const bound = push(env, item);
-			let empty = true;
-			for (const output of update(state, bound)) {
+			const outputs = yield* feed(update(state, bound), output => {
 				state = output;
-				empty = false;
-			}
-			if (empty) {
+			});
+			if (outputs === 0) {
 				state = none();
 			}
-		}
+		});
 		yield state;
-	}
+	});
 }
 
 /** `foreach`, as {@link reduce}: every output of the update is a state, and is yielded, through the extract when there is one. */
-function *foreach<State>(inits: Iterable<State>, items: () => Iterable<Value>, env: Env, update: (state: State, bound: Env) => Iterable<State>, extract: ((state: State, bound: Env) => Iterable<State>) | null): Generator<State> {
-	for (const init of inits) {
+function *foreach<State>(inits: Iterable<State>, items: () => Iterable<Value>, env: Env, update: (state: State, bound: Env) => Iterable<State>, extract: ((state: State, bound: Env) => Iterable<State>) | null): Generator<State, void, Resumed> {
+	yield* each(inits, function*(init) {
 		let state = init;
-		for (const item of items()) {
+		yield* each(items(), function*(item) {
 			const bound = push(env, item);
-			for (const output of update(state, bound)) {
+			yield* each(update(state, bound), function*(output) {
 				state = output;
 				if (extract === null) {
 					yield output;
 				} else {
 					yield* extract(output, bound);
 				}
-			}
-		}
-	}
+			});
+		});
+	});
 }
 
 /** Every variable a pattern binds. */
@@ -204,6 +214,8 @@ function patternVariables(pattern: ast.Pattern, into: string[] = []): string[] {
 export interface Program {
 	readonly filter: (input: Value) => Value | Iterable<Value>;
 	readonly stream: boolean;
+	/** Whether the stream may yield `Await`s: one to run through `drive`, not a plain loop. */
+	readonly awaits: boolean;
 }
 
 export function instantiate(source: string, program: ast.Node, runtime: Runtime, lib: Lib, ctx: Context): Program {
@@ -229,9 +241,9 @@ class Compiler {
 		if (isStream(filter)) {
 			return { *filter(input) {
 				yield* filter(input, null);
-			}, stream: true };
+			}, stream: true, awaits: isTask(filter) };
 		}
-		return { filter: input => filter(input, null), stream: false };
+		return { filter: input => filter(input, null), stream: false, awaits: false };
 	}
 
 	// -- Rendering --
@@ -299,17 +311,26 @@ class Compiler {
 
 	private renderer(scope: Scope): Render {
 		return {
-			value: node => this.value(node, scope),
-			generator: node => this.generator(node, scope),
+			value: node => this.strict(this.value(node, scope)),
+			generator: node => this.strict(this.generator(node, scope)),
 			path: node => this.path(node, scope),
 			invalid: filter => this.invalid(filter),
+			filter: node => this.value(node, scope),
 		};
+	}
+
+	/** Guards a place compiled to run a stream as plain values: a task there would leak its awaits. */
+	private strict<Fn extends Filter>(filter: Fn): Fn {
+		if (isTask(filter)) {
+			throw new CompileError('a filter that awaits is not supported here');
+		}
+		return filter;
 	}
 
 	/** A filter that is not a path expression, as a path filter: each value it yields is the runtime's invalid path. */
 	private invalid(filter: Filter): PathFilter {
 		const { invalidPath } = this.rt;
-		const stream = generator(filter);
+		const stream = generator(this.strict(filter));
 		return function*(_path, value, env) {
 			for (const output of stream(value, env)) {
 				yield invalidPath(output);
@@ -408,6 +429,9 @@ class Compiler {
 				};
 			case 'def': {
 				const callee = this.callee(binding, node, scope);
+				if (callee.task) {
+					throw this.error('a filter that awaits is not supported here', node.at);
+				}
 				return function*(path, value, env) {
 					const bound = lookup(env, distance) as Bound;
 					for (const frames of callee(bound, env, value)) {
@@ -426,18 +450,31 @@ class Compiler {
 			// The definition's own body is being rendered: assume a single value, and be told if not
 			binding.assumed = true;
 		}
-		if (binding.shape === 'stream' || callee.streams) {
-			return function*(input, env) {
-				const bound = lookup(env, distance) as Bound;
-				const body = bound.definition.value;
-				for (const frames of callee(bound, env, input)) {
-					if (isStream(body)) {
-						yield* body(input, frames);
-					} else {
-						yield body(input, frames);
-					}
+		if (binding.shape === 'stream' || binding.shape === 'task' || callee.streams) {
+			const called = callee.task
+				? function*(input: Value, env: Env): Generator<Value, void, Resumed> {
+					const bound = lookup(env, distance) as Bound;
+					const body = bound.definition.value;
+					yield* each(callee(bound, env, input), function*(frames) {
+						if (isStream(body)) {
+							yield* body(input, frames);
+						} else {
+							yield body(input, frames);
+						}
+					});
 				}
-			};
+				: function*(input: Value, env: Env): Generator<Value, void, Resumed> {
+					const bound = lookup(env, distance) as Bound;
+					const body = bound.definition.value;
+					for (const frames of callee(bound, env, input)) {
+						if (isStream(body)) {
+							yield* body(input, frames);
+						} else {
+							yield body(input, frames);
+						}
+					}
+				};
+			return binding.shape === 'task' || callee.task ? task(called) : called;
 		}
 		return (input, env) => {
 			const bound = lookup(env, distance) as Bound;
@@ -475,15 +512,22 @@ class Compiler {
 		if (allSingle(filters)) {
 			const singles: readonly Single[] = filters;
 			const callee = (bound: Bound, env: Env, input: Value): Env[] => [ build(bound, env, singles.map(filter => filter(input, env))) ];
-			return Object.assign(callee, { streams: false });
+			return Object.assign(callee, { streams: false, task: false });
 		}
 		const streams = filters.map(generator);
-		const callee = function*(bound: Bound, env: Env, input: Value): Generator<Env> {
-			for (const values of product(streams, input, env, 'first')) {
-				yield build(bound, env, values);
+		const awaits = filters.some(isTask);
+		const callee = awaits
+			? function*(bound: Bound, env: Env, input: Value): Generator<Env, void, Resumed> {
+				yield* each(product(streams, input, env, 'first'), function*(values) {
+					yield build(bound, env, values);
+				});
 			}
-		};
-		return Object.assign(callee, { streams: true });
+			: function*(bound: Bound, env: Env, input: Value): Generator<Env, void, Resumed> {
+				for (const values of product(streams, input, env, 'first')) {
+					yield build(bound, env, values);
+				}
+			};
+		return Object.assign(callee, { streams: true, task: awaits });
 	}
 
 	/** A filter argument's forms. The path form is rendered when first asked for, which is usually never. */
@@ -524,12 +568,12 @@ class Compiler {
 			}
 		}
 		let value = this.value(node.body, bodyScope);
-		if (binding.assumed && isStream(value)) {
-			// A self-call assumed a single value and the body is a stream: settle on that and render again
-			binding.shape = 'stream';
+		if (binding.assumed && shapeOf(value) !== 'single') {
+			// A self-call assumed a single value and the body is not one: settle on its shape and render again
+			binding.shape = shapeOf(value);
 			value = this.value(node.body, bodyScope);
 		}
-		binding.shape = isStream(value) ? 'stream' : 'single';
+		binding.shape = shapeOf(value);
 		let path: PathFilter | undefined;
 		const render = this.renderer(bodyScope);
 		const definition: Definition = {
@@ -545,9 +589,10 @@ class Compiler {
 
 	private readonly rest = (rest: Filter, definition: Definition): Filter => {
 		if (isStream(rest)) {
-			return function*(input, env) {
+			const defined: Stream = function*(input, env) {
 				yield* rest(input, push(env, { definition, env } satisfies Bound));
 			};
+			return isTask(rest) ? task(defined) : defined;
 		}
 		return (input, env) => rest(input, push(env, { definition, env } satisfies Bound));
 	};
@@ -574,13 +619,11 @@ class Compiler {
 		if (!isStream(source) && !isStream(body)) {
 			return (input, env) => body(input, push(env, source(input, env)));
 		}
-		const sources = generator(source);
 		const bodies = generator(body);
-		return function*(input, env) {
-			for (const value of sources(input, env)) {
-				yield* bodies(input, push(env, value));
-			}
-		};
+		const bound = over(generator(source), function*(value, input, env) {
+			yield* bodies(input, push(env, value));
+		});
+		return isTask(body) ? task(bound) : bound;
 	}
 
 	private pathBind(node: ast.Bind, scope: Scope): PathFilter {
@@ -588,7 +631,7 @@ class Compiler {
 		if (desugared !== node) {
 			return this.path(desugared, scope);
 		}
-		const sources = this.generator(node.source, scope);
+		const sources = this.strict(this.generator(node.source, scope));
 		const inner = scope.withVariable(simplePattern(node.patterns)!.name);
 		const body = this.path(node.body, inner);
 		return function*(path, value, env) {
@@ -659,9 +702,10 @@ class Compiler {
 		const inits = this.generator(node.init, scope);
 		const sources = this.generator(node.source, scope);
 		const updates = this.generator(node.update, inner);
-		return function*(input, env) {
+		const folded: Stream = function*(input, env) {
 			yield* reduce(inits(input, env), () => sources(input, env), env, updates, () => null);
 		};
+		return [ inits, sources, updates ].some(isTask) ? task(folded) : folded;
 	}
 
 	/**
@@ -674,7 +718,7 @@ class Compiler {
 			return this.path(this.desugarFold(node), scope);
 		}
 		const inits = this.path(node.init, scope);
-		const sources = this.generator(node.source, scope);
+		const sources = this.strict(this.generator(node.source, scope));
 		const updates = this.path(node.update, inner);
 		const { invalidPath } = this.rt;
 		return function*(path, value, env) {
@@ -692,9 +736,10 @@ class Compiler {
 		const sources = this.generator(node.source, scope);
 		const updates = this.generator(node.update, inner);
 		const extracts = node.extract === null ? null : this.generator(node.extract, inner);
-		return function*(input, env) {
+		const folded: Stream = function*(input, env) {
 			yield* foreach(inits(input, env), () => sources(input, env), env, updates, extracts);
 		};
+		return [ inits, sources, updates, ...extracts === null ? [] : [ extracts ] ].some(isTask) ? task(folded) : folded;
 	}
 
 	/** `foreach` as a path expression, as {@link pathReduce}. */
@@ -704,7 +749,7 @@ class Compiler {
 			return this.path(this.desugarFold(node), scope);
 		}
 		const inits = this.path(node.init, scope);
-		const sources = this.generator(node.source, scope);
+		const sources = this.strict(this.generator(node.source, scope));
 		const updates = this.path(node.update, inner);
 		const extracts = node.extract === null ? null : this.path(node.extract, inner);
 		return function*(path, value, env) {
@@ -740,7 +785,7 @@ class Compiler {
 		const inner = scope.child();
 		inner.labels.set(node.name, scope.depth);
 		const body = this.generator(node.body, inner);
-		return function*(input, env) {
+		const labeled: Stream = function*(input, env) {
 			const token = {};
 			try {
 				yield* body(input, push(env, token));
@@ -750,6 +795,7 @@ class Compiler {
 				}
 			}
 		};
+		return isTask(body) ? task(labeled) : labeled;
 	}
 
 	private pathLabel(node: ast.Label, scope: Scope): PathFilter {

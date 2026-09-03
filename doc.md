@@ -138,6 +138,25 @@ the unwrapping — arithmetic, comparison and indexing coerce it — and `JSON.s
 spelling through the box's own `toJSON`. The JavaScript runtime counts a boxed `Number` as a
 number (`isNumber`, `typeOf`, `equal`), a JavaScript-native courtesy; it never makes one.
 
+### Filters that await
+
+An extension — jq has nothing to await. A library function may settle a promise per call:
+`promises(render, args, body)` is `values` with an async body. The filter it returns is a task: a
+plain sync generator that yields an `Await` holding the promise among its values. `drive` at the
+very top is the only async frame there is — it collects values, settles what the stream awaits,
+and resumes the generator with the result, throwing a rejection back in (as a `JqError` when the
+body meant it to be caught) where the program's own `try` can catch it. `run` returns an array
+when nothing awaited and a promise of one once something has; a compiled filter says `awaits` when
+it must go through `drive` rather than a plain loop.
+
+Whether a filter is a task is read off the function at instantiation, as `isStream` is: a
+construct over a task builds an `Await`-forwarding loop (`each`), everything else keeps its plain
+loop, and a single value keeps its plain call — a program with nothing to await compiles exactly
+as before. `render.value` and `render.generator` refuse a task, so a library function that runs a
+stream itself — `limit`, `first`, a filter parameter's closure — rejects an awaiting argument at
+compile time rather than mistaking an `Await` for a value at runtime; `render.filter` is the
+opt-in the task-aware constructs use.
+
 ### Files
 
 - `compiler/parser.ts`, `compiler/ast.ts` — scannerless recursive descent to a plain syntax tree,
@@ -145,7 +164,8 @@ number (`isNumber`, `typeOf`, `equal`), a JavaScript-native courtesy; it never m
 - `compiler/compiler.ts` — instantiation: environments, definitions, calls, binding forms, and the
   dispatch of everything else to the runtime.
 - `compiler/filter.ts` — the contract: `Value`, `Filter`, `Env`, `Render`, `Context`, `Runtime`,
-  `LibFunction`, and the combinators (`values`, `combine`) a runtime or library is written with.
+  `LibFunction`, the combinators (`values`, `combine`, `promises`) a runtime or library is written
+  with, and the task machinery (`Await`, `each`, `drive`).
   Nothing under `compiler/` depends on a particular runtime.
 - `runtime/js/runtime.ts` — the default runtime: a handler per kind of node, jq's semantics in
   JavaScript, and `invalidPath`, what a value is where a path expression was needed.
