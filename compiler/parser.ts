@@ -85,14 +85,27 @@ class Parser {
 		return left;
 	}
 
-	// comma := alternative (',' alternative)*
+	// comma := binding (',' binding)*
 	private comma(): ast.Node {
-		let node = this.alternative();
+		let node = this.binding();
 		while (this.peekOperator() === ',') {
 			++this.index;
-			node = { type: 'comma', left: node, right: this.alternative() };
+			node = { type: 'comma', left: node, right: this.binding() };
 		}
 		return node;
+	}
+
+	// binding := alternative ('as' patterns '|' pipe)?
+	// The source of a binding is anything up to a comma or a pipe — jq 1.8 reads
+	// `. - 1 as $n | …` as `(. - 1) as $n | …` — and the body runs as far right as it can.
+	private binding(): ast.Node {
+		const source = this.alternative();
+		if (this.acceptKeyword('as')) {
+			const patterns = this.patterns();
+			this.expect('|');
+			return { type: 'bind', source, patterns, body: this.pipe() };
+		}
+		return source;
 	}
 
 	// alternative := assign ('//' alternative)?
@@ -184,15 +197,12 @@ class Parser {
 			const handler = this.acceptKeyword('catch') ? this.unary() : null;
 			return { type: 'try', body, handler };
 		}
-		return this.postfix(true);
+		return this.postfix();
 	}
 
-	// postfix := term suffix* ('as' patterns '|' pipe)?
+	// postfix := term suffix*
 	// suffix := FIELD | '.' string | '.'? '[' … ']' | '?'
-	// A binding is a suffix of sorts: jq's `Term as Patterns | Exp` takes a term on the left and
-	// runs as far right as it can. `reduce` and `foreach` parse their source with `allowAs` off,
-	// since there the `as` is theirs.
-	private postfix(allowAs: boolean): ast.Node {
+	private postfix(): ast.Node {
 		let node = this.term();
 		while (true) {
 			this.skip();
@@ -220,11 +230,6 @@ class Parser {
 			} else {
 				break;
 			}
-		}
-		if (allowAs && this.acceptKeyword('as')) {
-			const patterns = this.patterns();
-			this.expect('|');
-			return { type: 'bind', source: node, patterns, body: this.pipe() };
 		}
 		return node;
 	}
@@ -379,9 +384,10 @@ class Parser {
 		});
 	}
 
-	// reduce := 'reduce' postfix 'as' patterns '(' pipe ';' pipe ')'
+	// reduce := 'reduce' alternative 'as' patterns '(' pipe ';' pipe ')'
+	// The source is as wide as a binding's: `reduce .[] + 1 as $x (…)` folds over `.[] + 1`.
 	private reduce(): ast.Node {
-		const source = this.postfix(false);
+		const source = this.alternative();
 		this.expectKeyword('as');
 		const patterns = this.patterns();
 		this.expect('(');
@@ -393,9 +399,9 @@ class Parser {
 		return { type: 'reduce', source, patterns, init, update };
 	}
 
-	// foreach := 'foreach' postfix 'as' patterns '(' pipe ';' pipe (';' pipe)? ')'
+	// foreach := 'foreach' alternative 'as' patterns '(' pipe ';' pipe (';' pipe)? ')'
 	private foreach(): ast.Node {
-		const source = this.postfix(false);
+		const source = this.alternative();
 		this.expectKeyword('as');
 		const patterns = this.patterns();
 		this.expect('(');

@@ -794,3 +794,28 @@ void describe('tail calls', () => {
 		assert.deepEqual(results('def fib: if . < 2 then . else (. - 1 | fib) + (. - 2 | fib) end; fib', 15), [ 610 ]);
 	});
 });
+
+agree('the source of `as` runs up to a comma', [
+	[ '. - 1 as $n | $n + 10', 5 ],
+	[ '1, 2 as $x | $x, 3' ],
+	[ '1 as $x | $x, 3' ],
+	[ 'true and false as $x | 5' ],
+	[ 'false or true as $x | 5' ],
+	[ 'true // 3 as $x | 10' ],
+	[ '.[]? // 3 as $x | $x', {} ],
+	[ '.a = 2 as $x | 99', {} ],
+	[ '.a |= 7 as $x | 99', { a: 1 } ],
+	[ '1 < 2 as $x | 5' ],
+	[ '- .a as $x | 5', { a: 3 } ],
+	[ '1 + 2 as $x | $x * 10' ],
+	[ '2 as $x | . - $x as $y | $y', 5 ],
+	[ '2 as $x | $x as $y | $y' ],
+	[ 'if true then 1 else 2 end as $x | $x' ],
+	[ 'def f: 2; f + 1 as $x | $x' ],
+	[ '.[] as $x | $x', [ 7, 8 ] ],
+	[ '. as [$a, $b] | $a + $b', [ 1, 2 ] ],
+	[ 'reduce .[] + 1 as $x (0; . + $x)', [ 1, 2, 3 ] ],
+	[ 'foreach .[] + 1 as $x (0; . + $x)', [ 1, 2 ] ],
+	[ '{a: 2 as $x | $x}' ],
+	[ '[1 as $x | $x]' ],
+]);
