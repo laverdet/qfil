@@ -50,8 +50,10 @@ implementation deliberately differs:
   heap, but a user-written `def cnt: … | cnt` does not yet.
 - Strings are JavaScript strings: `length`, slices, `match` offsets and ordering all work in UTF-16
   code units where jq uses code points.
-- Regular expressions are JavaScript's `RegExp`, flags and all (`u` and `d` are always on), rather
-  than Oniguruma's.
+- Regular expressions are JavaScript's `RegExp` (`u` and `d` are always on), rather than
+  Oniguruma's. The default runtime reads flags as JavaScript's too; the jq runtime reads jq's:
+  `x` (extended), `m`/`p` (dot matches newline), `s` (the default anchoring), `n` (ignore empty
+  matches) — and refuses `l`, the longest match, which JavaScript cannot spell.
 - The library is a proof-of-concept subset — the core of jq's builtins (`map`, `select`, `paths`,
   `del`, `to_entries`, `sort_by`, `group_by`, `split`, `join`, `test`, `sub`, …) and the `@text`,
   `@json` and `@base64` formats — written in JavaScript rather than jq. Dates, `@csv`/`@sh`/`@uri`,

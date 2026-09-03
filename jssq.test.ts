@@ -498,7 +498,8 @@ agree('builtins', [
 ]);
 
 divergent('regular expressions are JavaScript\'s', [
-	// Flags are JavaScript's: `s` is dot-all, and Oniguruma's `x`, `n`, `l`, `p` do not exist
+	// Flags are JavaScript's here — the jq runtime reads jq's own — so `s` is dot-all and
+	// Oniguruma's `x`, `n`, `l`, `p` do not exist
 	[ 'test("a.b";"s")', 'a\nb', [ true ] ],
 	[ 'test("a";"x")', 'a', 'error' ],
 	// Offsets and lengths count UTF-16 code units
@@ -567,6 +568,25 @@ agree('jq runtime: jq\'s order', [
 	[ 'unique, group_by(type)', [ 1, [ 1 ], { a: 1 }, '1', null, 1, true ] ],
 	[ 'sort_by(.a)', [ { a: [ 1 ] }, { a: 'x' }, { a: null }, { a: {} } ] ],
 ], jqOptions);
+
+agree('jq runtime: jq\'s regex flags', [
+	// `x` ignores whitespace and comments outside a class; an escaped space is a space
+	[ '[test("a b"; "x"), test("a # comment\\nb"; "x")]', 'ab' ],
+	[ '[test("a b"; "x"), test("a[ ]b"; "x"), test("a\\\\ b"; "x")]', 'a b' ],
+	[ 'gsub("[0-9] "; "-"; "x")', 'a1b2' ],
+	// `m` and `p` put `.` across newlines; `s` anchors as the default already does
+	[ '[test("a.b"; "m"), test("a.b"; "p"), test("a.b"; "s"), test("a.b"), test("^b"; "m")]', 'a\nb' ],
+	// `n` discards empty matches, wherever matches are counted
+	[ '[match("a*"; "gn") | .offset], (match("a*"; "n") | .offset), test("a*"; "n"), split("a*"; "n")', 'bab' ],
+	[ 'test("a*"; "n")', 'b' ],
+	[ 'test("a"; "q")' ],
+], jqOptions);
+
+void describe('jq runtime: what JavaScript cannot match', () => {
+	void it('refuses the longest-match flag', () => {
+		assert.throws(() => run('match("a|aa"; "l")', 'aaa', jqOptions), { name: 'JqError', message: 'l (longest match) is not supported' });
+	});
+});
 
 agreeText('jq runtime: numbers keep their spelling', [
 	[ '1.000, 1e2, 1E2, 0.10, 100000000000000000000, -1.000, 3.0, 0.0, 1.10e1, 1.5e300, 00, 1e-7, 0.000001' ],

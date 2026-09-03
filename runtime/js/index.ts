@@ -287,7 +287,10 @@ function *limited<Type>(count: Value, outputs: Iterable<Type>): Generator<Type> 
 // Regular expressions are JavaScript's, flags included. `u` and `d` are always set, so patterns
 // are Unicode-aware and captures carry offsets; offsets are UTF-16 code units.
 
-function regex(pattern: Value, flags: Value, extra = ''): RegExp {
+/** Builds the RegExp of a match call: what the pattern and flags mean is the library's to say — JavaScript's reading here, jq's in the jq library. */
+export type RegexCompiler = (pattern: Value, flags: Value, extra: string) => RegExp;
+
+export function regex(pattern: Value, flags: Value, extra = ''): RegExp {
 	if (typeof pattern !== 'string') {
 		throw new JqError(`${describe(pattern)} cannot be matched, as it is not a string`);
 	} else if (flags !== null && typeof flags !== 'string') {
@@ -304,11 +307,11 @@ function regex(pattern: Value, flags: Value, extra = ''): RegExp {
 type WithRegex = (input: Value, env: Env, body: (regex: RegExp, input: Value) => Iterable<Value>) => Iterable<Value>;
 
 /** A regex from its arguments — compiled once when both are literals, otherwise per call: the syntax is there to be read. */
-function regexOf(render: Render, pattern: ast.Node, flags: ast.Node | null, extra = ''): WithRegex {
+function regexOf(compile: RegexCompiler, render: Render, pattern: ast.Node, flags: ast.Node | null, extra = ''): WithRegex {
 	const literalPattern = constant(pattern);
 	const literalFlags = flags === null ? null : constant(flags);
 	if (literalPattern !== undefined && literalFlags !== undefined) {
-		const compiled = regex(literalPattern, literalFlags, extra);
+		const compiled = compile(literalPattern, literalFlags, extra);
 		return (input, _env, body) => body(compiled, input);
 	}
 	const args = streams(render, flags === null ? [ pattern ] : [ pattern, flags ], function*(_input, re, fl) {
@@ -317,16 +320,36 @@ function regexOf(render: Render, pattern: ast.Node, flags: ast.Node | null, extr
 	return function*(input, env, body) {
 		for (const pair of args(input, env)) {
 			const [ re, fl ] = pair as [ Value, Value ];
-			yield* body(regex(re, fl, extra), input);
+			yield* body(compile(re, fl, extra), input);
 		}
 	};
 }
 
-/** Every match when the pattern is global, otherwise the first. */
+const skipsEmpty: unique symbol = Symbol('jssq.skipsEmpty');
+
+/** Marks a regex whose empty matches do not count, as jq's `n` flag has it. */
+export function ignoringEmpty(regex: RegExp): RegExp {
+	return Object.assign(regex, { [skipsEmpty]: true });
+}
+
+function ignoresEmpty(regex: RegExp): boolean {
+	return (regex as { readonly [skipsEmpty]?: boolean })[skipsEmpty] === true;
+}
+
+/** Every match when the pattern is global, otherwise the first; a regex marked by `ignoringEmpty` counts only the nonempty ones. */
 function execAll(regex: RegExp, input: Value): RegExpExecArray[] {
 	const text = assertString(input, 'match');
 	if (regex.global) {
-		return [ ...text.matchAll(regex) ];
+		const all = [ ...text.matchAll(regex) ];
+		return ignoresEmpty(regex) ? all.filter(match => match[0] !== '') : all;
+	} else if (ignoresEmpty(regex)) {
+		// The first nonempty match: an empty one at an earlier offset does not count
+		for (const match of text.matchAll(new RegExp(regex.source, `${regex.flags}g`))) {
+			if (match[0] !== '') {
+				return [ match ];
+			}
+		}
+		return [];
 	}
 	const match = regex.exec(text);
 	return match === null ? [] : [ match ];
@@ -383,17 +406,17 @@ function *substitute(regex: RegExp, input: Value, replacement: (groups: Value) =
 	}
 }
 
-function regexFunction(extra: string, body: (regex: RegExp, input: Value) => Iterable<Value>): LibFunction {
+function regexFunction(compile: RegexCompiler, extra: string, body: (regex: RegExp, input: Value) => Iterable<Value>): LibFunction {
 	const withRegex = (regexes: WithRegex): Stream => function*(input, env) {
 		yield* regexes(input, env, body);
 	};
 	return overload(
-		(render, pattern) => withRegex(regexOf(render, pattern, null, extra)),
-		(render, pattern, flags) => withRegex(regexOf(render, pattern, flags, extra)),
+		(render, pattern) => withRegex(regexOf(compile, render, pattern, null, extra)),
+		(render, pattern, flags) => withRegex(regexOf(compile, render, pattern, flags, extra)),
 	);
 }
 
-function subFunction(extra: string): LibFunction {
+function subFunction(compile: RegexCompiler, extra: string): LibFunction {
 	const withRegex = (render: Render, regexes: WithRegex, replacementNode: ast.Node): Stream => {
 		const replacement = render.generator(replacementNode);
 		return function*(input, env) {
@@ -401,13 +424,13 @@ function subFunction(extra: string): LibFunction {
 		};
 	};
 	return overload(
-		(render, pattern, replacement) => withRegex(render, regexOf(render, pattern, null, extra), replacement),
-		(render, pattern, replacement, flags) => withRegex(render, regexOf(render, pattern, flags, extra), replacement),
+		(render, pattern, replacement) => withRegex(render, regexOf(compile, render, pattern, null, extra), replacement),
+		(render, pattern, replacement, flags) => withRegex(render, regexOf(compile, render, pattern, flags, extra), replacement),
 	);
 }
 
 function *testWith(compiled: RegExp, input: Value): Generator<Value> {
-	yield compiled.test(assertString(input, 'test'));
+	yield ignoresEmpty(compiled) ? execAll(compiled, input).length > 0 : compiled.test(assertString(input, 'test'));
 }
 
 function matchWith(compiled: RegExp, input: Value): Value[] {
@@ -419,11 +442,34 @@ function *splitWith(compiled: RegExp, input: Value): Generator<Value> {
 	const pieces: string[] = [];
 	let previous = 0;
 	for (const match of text.matchAll(compiled)) {
+		if (ignoresEmpty(compiled) && match[0] === '') {
+			continue;
+		}
 		pieces.push(text.slice(previous, match.index));
 		previous = match.index + match[0].length;
 	}
 	pieces.push(text.slice(previous));
 	yield pieces;
+}
+
+/**
+ * The functions that match a regex — `test`, `match`, `split`, `sub`, `gsub` — over a compiler,
+ * since what a pattern and its flags mean is the library's to say: JavaScript's reading in this
+ * one, jq's in the jq library.
+ */
+export function matching(compile: RegexCompiler): Lib {
+	return {
+		test: regexFunction(compile, '', testWith),
+		match: regexFunction(compile, '', matchWith),
+		sub: subFunction(compile, ''),
+		gsub: subFunction(compile, 'g'),
+		split: overload(
+			(render, separator) => values(render, [ separator ], (input, value) => split(assertString(input, 'split'), assertString(value, 'split'))),
+			(render, pattern, flags) => function*(input, env) {
+				yield* regexOf(compile, render, pattern, flags, 'g')(input, env, splitWith);
+			},
+		),
+	};
 }
 
 /** A filter argument run over the input, as `map(f)` and `select(f)` take one. */
@@ -632,19 +678,10 @@ export const lib: Lib = {
 		const text = assertString(input, 'rtrimstr');
 		return typeof value === 'string' && value !== '' && text.endsWith(value) ? text.slice(0, -value.length) : text;
 	}),
-	split: overload(
-		(render, separator) => values(render, [ separator ], (input, value) => split(assertString(input, 'split'), assertString(value, 'split'))),
-		(render, pattern, flags) => function*(input, env) {
-			yield* regexOf(render, pattern, flags, 'g')(input, env, splitWith);
-		},
-	),
+	...matching(regex),
 	join: (render, separator) => values(render, [ separator ], (input, value) => join(input, value)),
 	ascii_downcase: unary(input => assertString(input, 'ascii_downcase').replace(/[A-Z]+/g, text => text.toLowerCase())),
 	ascii_upcase: unary(input => assertString(input, 'ascii_upcase').replace(/[a-z]+/g, text => text.toUpperCase())),
-	test: regexFunction('', testWith),
-	match: regexFunction('', matchWith),
-	sub: subFunction(''),
-	gsub: subFunction('g'),
 	floor: unary(input => Math.floor(assertNumber(input, 'floor'))),
 	sqrt: unary(input => Math.sqrt(assertNumber(input, 'sqrt'))),
 	pow: (render, base, exponent) => values(render, [ base, exponent ], (_input, left, right) => assertNumber(left, 'pow') ** assertNumber(right, 'pow')),
