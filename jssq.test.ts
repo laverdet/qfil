@@ -747,6 +747,9 @@ void describe('filters that await', () => {
 		// A rejection that is not the language's own error passes the language's `try` untouched
 		await assert.rejects(eventually('try nasty catch .'), TypeError);
 	});
+	void it('follows tail calls between awaits', async () => {
+		assert.deepEqual(await eventually('def f: later(.), (if . > 0 then . - 1 | f else empty end); [f]', 2), [ [ 2, 1, 0 ] ]);
+	});
 	void it('refuses a task where a plain stream was compiled', () => {
 		const refused = [
 			'limit(1; later(1))',
@@ -760,5 +763,34 @@ void describe('filters that await', () => {
 		for (const filter of refused) {
 			assert.throws(() => compile(filter, { lib: slowly }), CompileError, filter);
 		}
+	});
+});
+
+/** Tail calls: a recursive call in tail position runs on one frame, not the JavaScript stack. */
+void describe('tail calls', () => {
+	const results = (filter: string, input: Value = null): Value[] => run(filter, input) as Value[];
+	void it('runs deep single recursion on one frame', () => {
+		assert.deepEqual(results('def f: if . > 0 then . - 1 | f else "done" end; f', 1000000), [ 'done' ]);
+	});
+	void it('carries accumulators through value parameters', () => {
+		assert.deepEqual(results('def sum($n; $acc): if $n == 0 then $acc else sum($n - 1; $acc + $n) end; sum(.; 0)', 100000), [ 5000050000 ]);
+	});
+	void it('follows the tail calls of a stream', () => {
+		assert.deepEqual(results('def count: if . > 0 then ., (. - 1 | count) else empty end; [count] | length', 100000), [ 100000 ]);
+	});
+	void it('cycles a generator under limit', () => {
+		assert.deepEqual(results('def cycle: "x", cycle; [limit(20000; cycle)] | length'), [ 20000 ]);
+	});
+	void it('threads through nested definitions', () => {
+		assert.deepEqual(results('def f: def g: . - 1 | f; if . > 0 then g else "ok" end; f', 500000), [ 'ok' ]);
+	});
+	void it('takes the alternative\'s right as a tail', () => {
+		assert.deepEqual(results('def f: if . > 0 then (empty // (. - 1 | f)) else "alt" end; f', 100000), [ 'alt' ]);
+	});
+	void it('binds on the way down', () => {
+		assert.deepEqual(results('def f: if . > 0 then ((. - 1) as $n | $n | f) else "bound" end; f', 100000), [ 'bound' ]);
+	});
+	void it('leaves non-tail recursion alone', () => {
+		assert.deepEqual(results('def fib: if . < 2 then . else (. - 1 | fib) + (. - 2 | fib) end; fib', 15), [ 610 ]);
 	});
 });

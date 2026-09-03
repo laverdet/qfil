@@ -233,7 +233,8 @@ export const runtime: Runtime = {
 	pipe: {
 		value: (node, render) => {
 			const left = render.filter(node.left);
-			const right = render.filter(node.right);
+			// With one value on the left, the right's outputs are the pipe's last
+			const right = isStream(left) ? render.filter(node.right) : render.last(node.right);
 			if (!isStream(left)) {
 				if (!isStream(right)) {
 					return (input, env) => right(left(input, env), env);
@@ -262,7 +263,8 @@ export const runtime: Runtime = {
 	comma: {
 		value: (node, render) => {
 			const left = generator(render.filter(node.left));
-			const right = generator(render.filter(node.right));
+			// The left is exhausted before the right begins: the right's outputs are the comma's last
+			const right = generator(render.last(node.right));
 			const both: Stream = function*(input, env) {
 				yield* left(input, env);
 				yield* right(input, env);
@@ -289,7 +291,8 @@ export const runtime: Runtime = {
 		// The truthy outputs of the left, or those of the right when there are none; errors are errors
 		value: (node, render) => {
 			const left = generator(render.filter(node.left));
-			const right = generator(render.filter(node.right));
+			// The right runs only once the left has nothing truthy left: its outputs are the last
+			const right = generator(render.last(node.right));
 			if (isTask(left) || isTask(right)) {
 				return task(function*(input, env) {
 					let found = false;
@@ -379,8 +382,10 @@ export const runtime: Runtime = {
 	if: {
 		value: (node, render) => {
 			const condition = render.filter(node.condition);
-			const then = render.filter(node.then);
-			const otherwise = node.else === null ? identityFilter : render.filter(node.else);
+			// With one condition value, the chosen branch's outputs are the if's last
+			const branch = isStream(condition) ? render.filter : render.last;
+			const then = branch(node.then);
+			const otherwise = node.else === null ? identityFilter : branch(node.else);
 			if (!isStream(condition) && !isStream(then) && !isStream(otherwise)) {
 				return (input, env) => truthy(condition(input, env)) ? then(input, env) : otherwise(input, env);
 			}

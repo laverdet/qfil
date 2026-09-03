@@ -62,6 +62,11 @@ export interface Render {
 	readonly path: (node: ast.Node) => PathFilter;
 	/** The node's filter whatever its shape — a task when it awaits, which `value` and `generator` refuse. */
 	readonly filter: (node: ast.Node) => Filter;
+	/**
+	 * As `filter`, for the one child whose outputs are the caller's own last: everything before it
+	 * exhausted, nothing of the caller's after it. A recursive call there becomes a tail call.
+	 */
+	readonly last: (node: ast.Node) => Filter;
 	/** A filter that is not a path expression, as a path filter: each of its values is the runtime's invalid path. */
 	readonly invalid: (filter: Filter) => PathFilter;
 }
@@ -148,6 +153,24 @@ export function isTask(fn: Filter | PathFilter): boolean {
 }
 
 /**
+ * Forwards one `Await` to the driver, resuming `iterator` with its settlement — or throwing its
+ * rejection into it, where the stream's own `try` may catch it. Only a settlement arrives at the
+ * forwarding yield, so an error coming out of this frame is the stream's own.
+ */
+function *forward<Item, Out>(waiting: Await, iterator: Iterator<Item, unknown, Resumed>): Generator<Out, IteratorResult<Item, unknown>, Resumed> {
+	try {
+		// A forwarded instruction is invisible to the types, as it is to every frame it passes
+		return iterator.next(yield waiting as unknown as Out);
+	} catch (error) {
+		if (iterator.throw === undefined) {
+			throw error;
+		} else {
+			return iterator.throw(error);
+		}
+	}
+}
+
+/**
  * A stream's values inside a task: each one through `body`, whose own yields pass through, and
  * each `Await` passed along to the driver — its resolution fed back into the stream, a rejection
  * thrown into it. Returns how many values it saw, which is how a caller learns the stream was
@@ -155,28 +178,14 @@ export function isTask(fn: Filter | PathFilter): boolean {
  * loop.
  */
 export function *each<Item, Out>(iterable: Iterable<Item>, body: (item: Item) => Generator<Out, void, Resumed>): Generator<Out, number, Resumed> {
-	const iterator = iterable[Symbol.iterator]();
+	const iterator = iterable[Symbol.iterator]() as Iterator<Item, unknown, Resumed>;
 	let seen = 0;
 	try {
 		let next = iterator.next();
 		while (next.done !== true) {
 			const item = next.value;
 			if (item instanceof Await) {
-				// An `Await` of the stream's own: forward it, and resume the stream with what the
-				// driver sends back. Only a settlement arrives here, so a rejection goes into the
-				// stream, not out of this frame.
-				let resolved;
-				try {
-					// A forwarded instruction is invisible to the types, as it is to every frame it passes
-					resolved = yield item as unknown as Out;
-				} catch (error) {
-					if (iterator.throw === undefined) {
-						throw error;
-					}
-					next = iterator.throw(error);
-					continue;
-				}
-				next = iterator.next(resolved);
+				next = yield* forward(item, iterator);
 			} else {
 				seen += 1;
 				yield* body(item);
@@ -214,6 +223,78 @@ export function over(stream: Stream, body: (value: Value, input: Value, env: Env
 			yield* body(value, input, env);
 		}
 	};
+}
+
+/**
+ * What a tail call to a recursive definition returns in place of a value: the next call, for
+ * whoever settles it — the recursion runs where `settle` loops, not on the JavaScript stack. Like
+ * an `Await`, it travels as a `Value` the types cannot spell, and only along the pass-through
+ * chain a tail position guarantees.
+ */
+export class Bounce {
+	readonly body: Single;
+	readonly input: Value;
+	readonly env: Env;
+
+	constructor(body: Single, input: Value, env: Env) {
+		this.body = body;
+		this.input = input;
+		this.env = env;
+	}
+
+	/** One call: the value, or the next bounce. */
+	step(): Value {
+		return this.body(this.input, this.env);
+	}
+}
+
+/** A value with its bounces followed: what a single tail call finally comes to. */
+export function settle(value: Value): Value {
+	let result = value;
+	while (result instanceof Bounce) {
+		result = result.step();
+	}
+	return result;
+}
+
+/** As `Bounce`, for a stream: yielded as a stream's last item, it replaces the stream being read in `unrolled`. */
+export class Tail {
+	readonly stream: () => Iterable<Value>;
+
+	constructor(stream: () => Iterable<Value>) {
+		this.stream = stream;
+	}
+}
+
+/**
+ * Reads a stream, following its tail calls on this one frame: a `Tail` replaces the stream being
+ * read, a `Bounce` settles to the value it stands for, and an `Await` passes to the driver as
+ * ever. The frame a `Tail` abandons is closed; a tail position guarantees it had nothing left.
+ */
+export function *unrolled(start: () => Iterable<Value>): Generator<Value, void, Resumed> {
+	let iterator = start()[Symbol.iterator]() as Iterator<Value, unknown, Resumed>;
+	try {
+		let next = iterator.next();
+		while (next.done !== true) {
+			const item = next.value;
+			if (item instanceof Tail) {
+				const previous = iterator;
+				iterator = item.stream()[Symbol.iterator]() as Iterator<Value, unknown, Resumed>;
+				previous.return?.();
+				next = iterator.next();
+			} else if (item instanceof Bounce) {
+				yield settle(item);
+				next = iterator.next();
+			} else if (item instanceof Await) {
+				next = yield* forward(item, iterator);
+			} else {
+				yield item;
+				next = iterator.next();
+			}
+		}
+	} finally {
+		iterator.return?.();
+	}
 }
 
 /**

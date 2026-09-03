@@ -13,7 +13,7 @@
  */
 import type * as ast from './ast.js';
 import type { Context, Env, Filter, Handled, Handler, Lib, LibFunction, PathFilter, Render, Resumed, Runtime, Single, Stream, Value } from './filter.js';
-import { Break, CompileError, allSingle, each, feed, generator, isStream, isTask, lookup, over, pathCall, product, push, task } from './filter.js';
+import { Bounce, Break, CompileError, Tail, allSingle, each, feed, generator, isStream, isTask, lookup, over, pathCall, product, push, settle, task, unrolled } from './filter.js';
 
 /** A definition: the filters of its body, called with its own frame and its parameters pushed on the environment it closed over. */
 interface Definition {
@@ -54,6 +54,8 @@ interface DefBinding {
 	/** Undefined while the body is rendered; a self-call then assumes a single value and says so. */
 	shape: 'single' | 'stream' | 'task' | undefined;
 	assumed: boolean;
+	/** Whether a call may come to a `Bounce` or a `Tail`: a tail call was compiled in its body. */
+	bouncy: boolean;
 }
 
 /** A filter parameter: its frame holds a closure. */
@@ -146,6 +148,24 @@ function shapeOf(filter: Filter): 'single' | 'stream' | 'task' {
 	return 'single';
 }
 
+/** A definition's body over one environment of a call: its value, or each of its stream. */
+function *invoke(body: Filter, input: Value, frames: Env): Generator<Value, void, Resumed> {
+	if (isStream(body)) {
+		yield* body(input, frames);
+	} else {
+		yield body(input, frames);
+	}
+}
+
+/** As {@link invoke}, for a bouncy definition: its tail calls followed here, on this one frame. */
+function *settling(body: Filter, input: Value, frames: Env): Generator<Value, void, Resumed> {
+	if (isStream(body)) {
+		yield* unrolled(() => body(input, frames));
+	} else {
+		yield settle(body(input, frames));
+	}
+}
+
 /**
  * `reduce`, over whatever its state is — a value, or a path and the value at it. `items` runs
  * afresh for each initial state; each item is pushed on the environment the update runs in, and
@@ -228,6 +248,8 @@ class Compiler {
 	private readonly lib: Lib;
 	private readonly ctx: Context;
 	private synthetics = 0;
+	/** The definition whose body is being rendered: whom a compiled tail call makes bouncy. */
+	private rendering: DefBinding | null = null;
 
 	constructor(source: string, runtime: Runtime, lib: Lib, ctx: Context) {
 		this.source = source;
@@ -248,17 +270,17 @@ class Compiler {
 
 	// -- Rendering --
 
-	/** A node's value form: what the runtime says it is, or a binding form of the compiler's own. */
-	value(node: ast.Node, scope: Scope): Filter {
+	/** A node's value form: what the runtime says it is, or a binding form of the compiler's own; `tail` says its outputs are a definition's own last. */
+	value(node: ast.Node, scope: Scope, tail = false): Filter {
 		switch (node.type) {
 			case 'variable':
 				return this.variable(node, scope);
 			case 'call':
-				return this.call(node, scope);
+				return this.call(node, scope, tail);
 			case 'def':
-				return this.def(node, scope, inner => this.value(node.rest, inner), this.rest);
+				return this.def(node, scope, inner => this.value(node.rest, inner, tail), this.rest);
 			case 'bind':
-				return this.bind(node, scope);
+				return this.bind(node, scope, tail);
 			case 'reduce':
 				return this.reduce(node, scope);
 			case 'foreach':
@@ -269,7 +291,7 @@ class Compiler {
 				return this.breakOut(node, scope);
 			case 'identity': case 'recurse': case 'literal': case 'string': case 'format': case 'index': case 'slice': case 'iterate': case 'try':
 			case 'pipe': case 'comma': case 'binary': case 'and': case 'or': case 'alternative': case 'negate': case 'assign': case 'if': case 'loc': case 'array': case 'object':
-				return this.handler(node).value(node, this.renderer(scope));
+				return this.handler(node).value(node, this.renderer(scope, tail));
 		}
 	}
 
@@ -309,13 +331,14 @@ class Compiler {
 		return this.rt[node.type] as Handler<Handled>;
 	}
 
-	private renderer(scope: Scope): Render {
+	private renderer(scope: Scope, tail = false): Render {
 		return {
 			value: node => this.strict(this.value(node, scope)),
 			generator: node => this.strict(this.generator(node, scope)),
 			path: node => this.path(node, scope),
 			invalid: filter => this.invalid(filter),
 			filter: node => this.value(node, scope),
+			last: node => this.value(node, scope, tail),
 		};
 	}
 
@@ -394,7 +417,7 @@ class Compiler {
 
 	// -- Calls --
 
-	private call(node: ast.Call, scope: Scope): Filter {
+	private call(node: ast.Call, scope: Scope, tail = false): Filter {
 		const binding = this.lookupFunction(node, scope);
 		if (typeof binding === 'function') {
 			return this.libCall(node, () => binding.call(this.ctx, this.renderer(scope), ...node.args));
@@ -409,7 +432,7 @@ class Compiler {
 					yield* bound.closure.generator(input, bound.env);
 				};
 			case 'def':
-				return this.callDef(binding, node, scope);
+				return this.callDef(binding, node, scope, tail);
 		}
 	}
 
@@ -443,38 +466,60 @@ class Compiler {
 	}
 
 	/** A call to a definition: its frame, then each argument, pushed on the environment it closed over. */
-	private callDef(binding: DefBinding, node: ast.Call, scope: Scope): Filter {
+	private callDef(binding: DefBinding, node: ast.Call, scope: Scope, tail: boolean): Filter {
 		const distance = scope.distance(binding.slot);
 		const callee = this.callee(binding, node, scope);
 		if (binding.shape === undefined) {
 			// The definition's own body is being rendered: assume a single value, and be told if not
 			binding.assumed = true;
 		}
+		if (tail && !callee.streams && (binding.shape === undefined || binding.bouncy)) {
+			// A tail call into a recursion: hand the consumer the next step instead of taking a
+			// stack frame for it. The definition being rendered is bouncy now — its non-tail call
+			// sites follow the chain, each on its one frame.
+			const rendering = this.rendering ?? function(): never {
+				throw new Error('Impossible: a tail call outside a definition');
+			}();
+			rendering.bouncy = true;
+			if (binding.shape === undefined || binding.shape === 'single') {
+				return (input, env) => {
+					const bound = lookup(env, distance) as Bound;
+					const [ frames ] = callee(bound, env, input);
+					// Single-valued, as the shape says; a `Bounce` travels as a `Value`
+					return new Bounce(bound.definition.value as Single, input, frames!) as unknown as Value;
+				};
+			}
+			return function*(input, env) {
+				const bound = lookup(env, distance) as Bound;
+				const [ frames ] = callee(bound, env, input);
+				yield new Tail(() => (bound.definition.value as Stream)(input, frames!)) as unknown as Value;
+			};
+		}
 		if (binding.shape === 'stream' || binding.shape === 'task' || callee.streams) {
+			const apply = binding.bouncy ? settling : invoke;
 			const called = callee.task
 				? function*(input: Value, env: Env): Generator<Value, void, Resumed> {
 					const bound = lookup(env, distance) as Bound;
 					const body = bound.definition.value;
 					yield* each(callee(bound, env, input), function*(frames) {
-						if (isStream(body)) {
-							yield* body(input, frames);
-						} else {
-							yield body(input, frames);
-						}
+						yield* apply(body, input, frames);
 					});
 				}
 				: function*(input: Value, env: Env): Generator<Value, void, Resumed> {
 					const bound = lookup(env, distance) as Bound;
 					const body = bound.definition.value;
 					for (const frames of callee(bound, env, input)) {
-						if (isStream(body)) {
-							yield* body(input, frames);
-						} else {
-							yield body(input, frames);
-						}
+						yield* apply(body, input, frames);
 					}
 				};
 			return binding.shape === 'task' || callee.task ? task(called) : called;
+		}
+		if (binding.bouncy) {
+			return (input, env) => {
+				const bound = lookup(env, distance) as Bound;
+				const [ frames ] = callee(bound, env, input);
+				return settle((bound.definition.value as Single)(input, frames!));
+			};
 		}
 		return (input, env) => {
 			const bound = lookup(env, distance) as Bound;
@@ -553,7 +598,7 @@ class Compiler {
 	 */
 	private def<Result>(node: ast.Def, scope: Scope, rest: (inner: Scope, definition: Definition) => Result, assemble: (rest: Result, definition: Definition) => Result): Result {
 		const key = `${node.name}/${node.params.length}`;
-		const binding: DefBinding = { kind: 'def', slot: scope.depth, def: node, shape: undefined, assumed: false };
+		const binding: DefBinding = { kind: 'def', slot: scope.depth, def: node, shape: undefined, assumed: false, bouncy: false };
 		const inner = scope.child();
 		inner.funcs.set(key, binding);
 		let bodyScope = inner;
@@ -567,13 +612,17 @@ class Compiler {
 				bodyScope.funcs.set(`${param.name}/0`, { kind: 'param', slot });
 			}
 		}
-		let value = this.value(node.body, bodyScope);
-		if (binding.assumed && shapeOf(value) !== 'single') {
-			// A self-call assumed a single value and the body is not one: settle on its shape and render again
+		const outer = this.rendering;
+		this.rendering = binding;
+		// The body itself is the definition's last act: a recursive call there is a tail call
+		let value = this.value(node.body, bodyScope, true);
+		if (binding.assumed && (shapeOf(value) !== 'single' || binding.bouncy)) {
+			// A self-call assumed a single, non-bouncy body and it is not that: settle and render again
 			binding.shape = shapeOf(value);
-			value = this.value(node.body, bodyScope);
+			value = this.value(node.body, bodyScope, true);
 		}
 		binding.shape = shapeOf(value);
+		this.rendering = outer;
 		let path: PathFilter | undefined;
 		const render = this.renderer(bodyScope);
 		const definition: Definition = {
@@ -608,14 +657,14 @@ class Compiler {
 	 * `source as $x | body`, once destructuring has been desugared to plain variables: each output
 	 * of the source is pushed on the environment the body runs in.
 	 */
-	private bind(node: ast.Bind, scope: Scope): Filter {
+	private bind(node: ast.Bind, scope: Scope, tail: boolean): Filter {
 		const desugared = this.desugar(node);
 		if (desugared !== node) {
-			return this.value(desugared, scope);
+			return this.value(desugared, scope, tail);
 		}
 		const source = this.value(node.source, scope);
 		const inner = scope.withVariable(simplePattern(node.patterns)!.name);
-		const body = this.value(node.body, inner);
+		const body = this.value(node.body, inner, tail && !isStream(source));
 		if (!isStream(source) && !isStream(body)) {
 			return (input, env) => body(input, push(env, source(input, env)));
 		}

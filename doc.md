@@ -157,6 +157,20 @@ stream itself — `limit`, `first`, a filter parameter's closure — rejects an 
 compile time rather than mistaking an `Await` for a value at runtime; `render.filter` is the
 opt-in the task-aware constructs use.
 
+### Tail calls
+
+A recursive call in tail position takes no stack frame: it comes to a `Bounce` (one value) or
+yields a `Tail` (a stream) — the next call, handed to whoever consumes the caller — and the
+non-tail call site that entered the recursion follows the chain on its one frame (`settle`,
+`unrolled`). Tail position threads through rendering as `render.last`: a handler grants it to the
+one child whose outputs are its own last, with the shape knowledge only it has — the right of `|`
+when the left is one value, both branches of `if` when the condition is, the right of `,` and
+`//` always, the body of `as` when the source is one value. The compiler grants it to a
+definition's body and to nothing else; `try`, `label`, the folds and call arguments keep their
+frames, so a `Bounce` travels only along a pass-through chain. A definition is bouncy once a tail
+call compiles in its body — settled through the same assumed-shape re-render as streams — and
+only calls into a recursion pay for any of this; everything else compiles as before.
+
 ### Files
 
 - `compiler/parser.ts`, `compiler/ast.ts` — scannerless recursive descent to a plain syntax tree,
@@ -165,7 +179,8 @@ opt-in the task-aware constructs use.
   dispatch of everything else to the runtime.
 - `compiler/filter.ts` — the contract: `Value`, `Filter`, `Env`, `Render`, `Context`, `Runtime`,
   `LibFunction`, the combinators (`values`, `combine`, `promises`) a runtime or library is written
-  with, and the task machinery (`Await`, `each`, `drive`).
+  with, the task machinery (`Await`, `each`, `drive`), and the tail-call machinery (`Bounce`,
+  `Tail`, `settle`, `unrolled`).
   Nothing under `compiler/` depends on a particular runtime.
 - `runtime/js/runtime.ts` — the default runtime: a handler per kind of node, jq's semantics in
   JavaScript, and `invalidPath`, what a value is where a path expression was needed.
