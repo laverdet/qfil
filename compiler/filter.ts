@@ -239,12 +239,13 @@ export function over<Args extends readonly unknown[], Item, Out>(source: (...arg
 		return task(function*(...args: Args) {
 			yield* each(source(...args), item => body(item, ...args));
 		});
+	} else {
+		return function*(...args: Args) {
+			for (const item of source(...args)) {
+				yield* body(item, ...args);
+			}
+		};
 	}
-	return function*(...args: Args) {
-		for (const item of source(...args)) {
-			yield* body(item, ...args);
-		}
-	};
 }
 
 /**
@@ -416,10 +417,11 @@ export function allSingle(filters: readonly Filter[]): filters is readonly Singl
 export function generator(filter: Filter): Stream {
 	if (isStream(filter)) {
 		return filter;
+	} else {
+		return function*(input, env) {
+			yield filter(input, env);
+		};
 	}
-	return function*(input, env) {
-		yield filter(input, env);
-	};
 }
 
 /** A library function called as a path expression; one without a path form is invalid there, as jq has it. */
@@ -473,22 +475,25 @@ export function combine(filters: readonly Filter[], body: (values: Value[], inpu
 			const first = filters[0]!;
 			const second = filters[1]!;
 			return (input, env) => body([ first(input, env), second(input, env) ], input, env);
+		} else {
+			return (input, env) => body(filters.map(filter => filter(input, env)), input, env);
 		}
-		return (input, env) => body(filters.map(filter => filter(input, env)), input, env);
-	}
-	const streams = filters.map(generator);
-	if (filters.some(isTask)) {
-		return task(function*(input, env) {
-			yield* each(product(streams, input, env, slowest), function*(values) {
-				yield body(values, input, env);
+	} else {
+		const streams = filters.map(generator);
+		if (filters.some(isTask)) {
+			return task(function*(input, env) {
+				yield* each(product(streams, input, env, slowest), function*(values) {
+					yield body(values, input, env);
+				});
 			});
-		});
-	}
-	return function*(input, env) {
-		for (const values of product(streams, input, env, slowest)) {
-			yield body(values, input, env);
+		} else {
+			return function*(input, env) {
+				for (const values of product(streams, input, env, slowest)) {
+					yield body(values, input, env);
+				}
+			};
 		}
-	};
+	}
 }
 
 /** As `combine`, for a body that yields. */
@@ -500,12 +505,13 @@ export function combineStreams(filters: readonly Filter[], body: (values: Value[
 				yield* body(values, input, env);
 			});
 		});
+	} else {
+		return function*(input, env) {
+			for (const values of product(streams, input, env, slowest)) {
+				yield* body(values, input, env);
+			}
+		};
 	}
-	return function*(input, env) {
-		for (const values of product(streams, input, env, slowest)) {
-			yield* body(values, input, env);
-		}
-	};
 }
 
 /** A library function of values: each argument evaluated, the call made once per combination. */

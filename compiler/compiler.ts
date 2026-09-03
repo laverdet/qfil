@@ -333,16 +333,18 @@ class Compiler {
 					awaits: true,
 					stream: true,
 				};
+			} else {
+				return {
+					*filter(input) {
+						yield* filter(input, null);
+					},
+					awaits: false,
+					stream: true,
+				};
 			}
-			return {
-				*filter(input) {
-					yield* filter(input, null);
-				},
-				awaits: false,
-				stream: true,
-			};
+		} else {
+			return { filter: input => filter(input, null), stream: false, awaits: false };
 		}
-		return { filter: input => filter(input, null), stream: false, awaits: false };
 	}
 
 	// -- Rendering --

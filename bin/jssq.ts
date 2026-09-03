@@ -108,8 +108,9 @@ function sortKeys(value: Value): Value {
 			sorted[key] = sortKeys(value[key]!);
 		}
 		return sorted;
+	} else {
+		return value;
 	}
-	return value;
 }
 
 /**
@@ -209,23 +210,23 @@ export async function main(argv: readonly string[]): Promise<number> {
 			for (const root of files.length === 0 ? [ '.' ] : files) {
 				yield entry(root);
 			}
-			return;
-		}
-		const text = files.length === 0 ? readStdin() : files.map(file => fs.readFileSync(file, 'utf8')).join('\n');
-		if (flags['raw-input'] === true) {
-			if (flags.slurp === true) {
-				yield text;
-				return;
-			}
-			const lines = text.split('\n');
-			yield* text.endsWith('\n') ? lines.slice(0, -1) : lines;
-			return;
-		}
-		const parsed = parseJsonStream(text, flavour.parse);
-		if (flags.slurp === true) {
-			yield parsed;
 		} else {
-			yield* parsed;
+			const text = files.length === 0 ? readStdin() : files.map(file => fs.readFileSync(file, 'utf8')).join('\n');
+			if (flags['raw-input'] === true) {
+				if (flags.slurp === true) {
+					yield text;
+				} else {
+					const lines = text.split('\n');
+					yield* text.endsWith('\n') ? lines.slice(0, -1) : lines;
+				}
+			} else {
+				const parsed = parseJsonStream(text, flavour.parse);
+				if (flags.slurp === true) {
+					yield parsed;
+				} else {
+					yield* parsed;
+				}
+			}
 		}
 	}();
 	const remaining = inputs[Symbol.iterator]();
@@ -271,8 +272,9 @@ export async function main(argv: readonly string[]): Promise<number> {
 		return 0;
 	} else if (last === undefined) {
 		return 4;
+	} else {
+		return last === null || last === false ? 1 : 0;
 	}
-	return last === null || last === false ? 1 : 0;
 }
 
 if (process.argv[1] !== undefined && import.meta.url === `file://${process.argv[1]}`) {

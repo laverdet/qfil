@@ -157,10 +157,11 @@ export function equal(left: Value, right: Value): boolean {
 		return Array.isArray(right) && left.length === right.length && left.every((value, ii) => equal(value, right[ii]!));
 	} else if (Array.isArray(right)) {
 		return false;
+	} else {
+		const keys = Object.keys(left);
+		return keys.length === Object.keys(right).length &&
+			keys.every(key => Object.hasOwn(right, key) && equal(left[key]!, right[key]!));
 	}
-	const keys = Object.keys(left);
-	return keys.length === Object.keys(right).length &&
-		keys.every(key => Object.hasOwn(right, key) && equal(left[key]!, right[key]!));
 }
 
 /**

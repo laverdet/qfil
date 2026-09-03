@@ -40,8 +40,9 @@ function make(at: string, stat: fs.Stats): Value {
 			return 'directory';
 		} else if (stat.isSymbolicLink()) {
 			return 'link';
+		} else {
+			return 'other';
 		}
-		return 'other';
 	}();
 	const made: Entry = { [marker]: true, path: at, name: basename(at) || at, type, size: stat.size, mtime: stat.mtimeMs };
 	return Object.assign(Object.create(null), made) as Value;

@@ -158,8 +158,9 @@ function join(value: Value, separator: Value): Value {
 				return element;
 			} else if (Array.isArray(element) || isObject(element)) {
 				throw new JqError(`${describe(element)} cannot be added to a string`);
+			} else {
+				return tojson(element);
 			}
-			return tojson(element);
 		}();
 		result = add(first ? '' : add(result, separator), piece);
 		first = false;
@@ -240,8 +241,9 @@ function *walk(value: Value, env: Env, filter: Stream): Generator<Value> {
 				}
 			}
 			return result;
+		} else {
+			return value;
 		}
-		return value;
 	}();
 	yield* filter(inner, env);
 }
@@ -339,16 +341,17 @@ function regexOf(compile: RegexCompiler, render: Render, pattern: ast.Node, flag
 	if (literalPattern !== undefined && literalFlags !== undefined) {
 		const compiled = compile(literalPattern, literalFlags, extra);
 		return (input, _env, body) => body(compiled, input);
+	} else {
+		const args = streams(render, flags === null ? [ pattern ] : [ pattern, flags ], function*(_input, re, fl) {
+			yield [ re, fl ?? null ];
+		});
+		return function*(input, env, body) {
+			for (const pair of args(input, env)) {
+				const [ re, fl ] = pair as [ Value, Value ];
+				yield* body(compile(re, fl, extra), input);
+			}
+		};
 	}
-	const args = streams(render, flags === null ? [ pattern ] : [ pattern, flags ], function*(_input, re, fl) {
-		yield [ re, fl ?? null ];
-	});
-	return function*(input, env, body) {
-		for (const pair of args(input, env)) {
-			const [ re, fl ] = pair as [ Value, Value ];
-			yield* body(compile(re, fl, extra), input);
-		}
-	};
 }
 
 const skipsEmpty: unique symbol = Symbol('jssq.skipsEmpty');
@@ -376,9 +379,10 @@ function execAll(regex: RegExp, input: Value): RegExpExecArray[] {
 			}
 		}
 		return [];
+	} else {
+		const match = regex.exec(text);
+		return match === null ? [] : [ match ];
 	}
-	const match = regex.exec(text);
-	return match === null ? [] : [ match ];
 }
 
 /** A match as jq's `match` object. */
@@ -590,12 +594,13 @@ export const lib: Lib = {
 					yield pair[0];
 				});
 			});
+		} else {
+			return function*(input, env) {
+				for (const [ path ] of paths([], input, env)) {
+					yield path;
+				}
+			};
 		}
-		return function*(input, env) {
-			for (const [ path ] of paths([], input, env)) {
-				yield path;
-			}
-		};
 	}),
 	del: withPath(paths => {
 		if (isTask(paths)) {
@@ -604,8 +609,9 @@ export const lib: Lib = {
 				yield* feed(paths([], input, env), pair => collected.push(pair[0]));
 				yield delpaths(input, collected);
 			});
+		} else {
+			return (input, env) => delpaths(input, [ ...paths([], input, env) ].map(([ path ]) => path));
 		}
-		return (input, env) => delpaths(input, [ ...paths([], input, env) ].map(([ path ]) => path));
 	}),
 	select: runtimePathFunction(
 		withFilter(condition => function*(input, env) {
@@ -641,10 +647,11 @@ export const lib: Lib = {
 							yield found;
 						}
 					});
+				} else {
+					return function*(path, value, env) {
+						yield* head(filter(path, value, env));
+					};
 				}
-				return function*(path, value, env) {
-					yield* head(filter(path, value, env));
-				};
 			},
 		),
 	),
@@ -667,12 +674,13 @@ export const lib: Lib = {
 						yield* limitedTask(bound, filter(path, value, env));
 					}
 				});
+			} else {
+				return function*(path, value, env) {
+					for (const bound of counts(value, env)) {
+						yield* limited(bound, filter(path, value, env));
+					}
+				};
 			}
-			return function*(path, value, env) {
-				for (const bound of counts(value, env)) {
-					yield* limited(bound, filter(path, value, env));
-				}
-			};
 		},
 	),
 	isempty: withFilter(filter => (input, env) => filter(input, env)[Symbol.iterator]().next().done === true),

@@ -63,14 +63,15 @@ function pathThrough(render: Render, target: ast.Node, key: ast.Node, read: (val
 				});
 			});
 		});
-	}
-	return function*(path, value, env) {
-		for (const kk of keys(value, env)) {
-			for (const [ pp, vv ] of targets(path, value, env)) {
-				yield [ extend(pp, extension(kk)), read(vv, kk) ];
+	} else {
+		return function*(path, value, env) {
+			for (const kk of keys(value, env)) {
+				for (const [ pp, vv ] of targets(path, value, env)) {
+					yield [ extend(pp, extension(kk)), read(vv, kk) ];
+				}
 			}
-		}
-	};
+		};
+	}
 }
 
 function formatter(name: string): (value: Value) => string {
@@ -134,8 +135,9 @@ export const runtime: Runtime = {
 			} else if (node.key.type === 'literal' && typeof node.key.value === 'number') {
 				const index = node.key.value;
 				return combine([ target ], ([ value ]) => intrinsics.element(value!, index));
+			} else {
+				return combine([ target, render.filter(node.key) ], ([ value, key ]) => intrinsics.index(value!, key!), 'last');
 			}
-			return combine([ target, render.filter(node.key) ], ([ value, key ]) => intrinsics.index(value!, key!), 'last');
 		},
 		path: (node, render) => pathThrough(render, node.target, node.key, intrinsics.index, key => key),
 	},
@@ -163,15 +165,16 @@ export const runtime: Runtime = {
 						});
 					});
 				});
-			}
-			return function*(path, value, env) {
-				for (const bound of bounds(value, env)) {
-					const { start, end } = bound as { start: Value; end: Value };
-					for (const [ pp, vv ] of targets(path, value, env)) {
-						yield [ extend(pp, bound), intrinsics.slice(vv, start, end) ];
+			} else {
+				return function*(path, value, env) {
+					for (const bound of bounds(value, env)) {
+						const { start, end } = bound as { start: Value; end: Value };
+						for (const [ pp, vv ] of targets(path, value, env)) {
+							yield [ extend(pp, bound), intrinsics.slice(vv, start, end) ];
+						}
 					}
-				}
-			};
+				};
+			}
 		},
 	},
 	iterate: {
@@ -205,22 +208,23 @@ export const runtime: Runtime = {
 						throw error;
 					}
 				};
-			}
-			// Errors of the body, and only those: the consumer runs outside this frame
-			const stream = generator(body);
-			const recover = handler === null ? null : generator(handler);
-			const tried: Stream = function*(input, env) {
-				try {
-					yield* stream(input, env);
-				} catch (error) {
-					if (!(error instanceof JqError)) {
-						throw error;
-					} else if (recover !== null) {
-						yield* recover(error.value, env);
+			} else {
+				// Errors of the body, and only those: the consumer runs outside this frame
+				const stream = generator(body);
+				const recover = handler === null ? null : generator(handler);
+				const tried: Stream = function*(input, env) {
+					try {
+						yield* stream(input, env);
+					} catch (error) {
+						if (!(error instanceof JqError)) {
+							throw error;
+						} else if (recover !== null) {
+							yield* recover(error.value, env);
+						}
 					}
-				}
-			};
-			return isTask(stream) || (recover !== null && isTask(recover)) ? task(tried) : tried;
+				};
+				return isTask(stream) || (recover !== null && isTask(recover)) ? task(tried) : tried;
+			}
 		},
 		path: (node, render) => {
 			if (node.handler === null && node.body.type === 'iterate') {
@@ -253,20 +257,20 @@ export const runtime: Runtime = {
 			const left = render.filter(node.left);
 			// With one value on the left, the right's outputs are the pipe's last
 			const right = isStream(left) ? render.filter(node.right) : render.last(node.right);
-			if (!isStream(left)) {
-				if (!isStream(right)) {
-					return (input, env) => right(left(input, env), env);
-				}
+			if (isStream(left)) {
+				const rights = generator(right);
+				const piped = over(left, function*(value, _input, env) {
+					yield* rights(value, env);
+				});
+				return isTask(right) ? task(piped) : piped;
+			} else if (isStream(right)) {
 				const piped: Stream = function*(input, env) {
 					yield* right(left(input, env), env);
 				};
 				return isTask(right) ? task(piped) : piped;
+			} else {
+				return (input, env) => right(left(input, env), env);
 			}
-			const rights = generator(right);
-			const piped = over(left, function*(value, _input, env) {
-				yield* rights(value, env);
-			});
-			return isTask(right) ? task(piped) : piped;
 		},
 		path: (node, render) => {
 			const left = render.path(node.left);
@@ -325,19 +329,20 @@ export const runtime: Runtime = {
 						yield* right(input, env);
 					}
 				});
-			}
-			return function*(input, env) {
-				let found = false;
-				for (const value of left(input, env)) {
-					if (truthy(value)) {
-						found = true;
-						yield value;
+			} else {
+				return function*(input, env) {
+					let found = false;
+					for (const value of left(input, env)) {
+						if (truthy(value)) {
+							found = true;
+							yield value;
+						}
 					}
-				}
-				if (!found) {
-					yield* right(input, env);
-				}
-			};
+					if (!found) {
+						yield* right(input, env);
+					}
+				};
+			}
 		},
 		path: (node, render) => {
 			const left = render.path(node.left);
@@ -356,19 +361,20 @@ export const runtime: Runtime = {
 						yield* right(path, value, env);
 					}
 				});
-			}
-			return function*(path, value, env) {
-				let found = false;
-				for (const pair of left(path, value, env)) {
-					if (truthy(pair[1])) {
-						found = true;
-						yield pair;
+			} else {
+				return function*(path, value, env) {
+					let found = false;
+					for (const pair of left(path, value, env)) {
+						if (truthy(pair[1])) {
+							found = true;
+							yield pair;
+						}
 					}
-				}
-				if (!found) {
-					yield* right(path, value, env);
-				}
-			};
+					if (!found) {
+						yield* right(path, value, env);
+					}
+				};
+			}
 		},
 	},
 	negate: {
@@ -395,45 +401,49 @@ export const runtime: Runtime = {
 						});
 						yield intrinsics.delpaths(editor.result(), deletions);
 					});
-				}
-				return (input, env) => {
-					const editor = new intrinsics.Editor(input);
-					const deletions: Path[] = [];
-					for (const [ path ] of paths([], input, env)) {
-						const outputs = update(editor.get(path), env)[Symbol.iterator]().next();
-						if (outputs.done === true) {
-							deletions.push(path);
-						} else {
-							editor.set(path, outputs.value);
+				} else {
+					return (input, env) => {
+						const editor = new intrinsics.Editor(input);
+						const deletions: Path[] = [];
+						for (const [ path ] of paths([], input, env)) {
+							const outputs = update(editor.get(path), env)[Symbol.iterator]().next();
+							if (outputs.done === true) {
+								deletions.push(path);
+							} else {
+								editor.set(path, outputs.value);
+							}
 						}
+						return intrinsics.delpaths(editor.result(), deletions);
+					};
+				}
+			} else {
+				const combineWith = function(): (current: Value, value: Value) => Value {
+					if (node.op === '=') {
+						return (_current, value) => value;
+					} else if (node.op === '//=') {
+						return (current, value) => truthy(current) ? current : value;
+					} else {
+						return binaries[node.op.slice(0, -1) as ast.BinaryOperator];
 					}
-					return intrinsics.delpaths(editor.result(), deletions);
-				};
-			}
-			const combineWith = function(): (current: Value, value: Value) => Value {
-				if (node.op === '=') {
-					return (_current, value) => value;
-				} else if (node.op === '//=') {
-					return (current, value) => truthy(current) ? current : value;
-				}
-				return binaries[node.op.slice(0, -1) as ast.BinaryOperator];
-			}();
-			if (isTask(paths) || isTask(right)) {
-				return task(over(generator(right), function*(value, input, env) {
-					const editor = new intrinsics.Editor(input);
-					yield* feed(paths([], input, env), pair => {
-						editor.set(pair[0], combineWith(editor.get(pair[0]), value));
+				}();
+				if (isTask(paths) || isTask(right)) {
+					return task(over(generator(right), function*(value, input, env) {
+						const editor = new intrinsics.Editor(input);
+						yield* feed(paths([], input, env), pair => {
+							editor.set(pair[0], combineWith(editor.get(pair[0]), value));
+						});
+						yield editor.result();
+					}));
+				} else {
+					return combine([ right ], ([ value ], input, env) => {
+						const editor = new intrinsics.Editor(input);
+						for (const [ path ] of paths([], input, env)) {
+							editor.set(path, combineWith(editor.get(path), value!));
+						}
+						return editor.result();
 					});
-					yield editor.result();
-				}));
-			}
-			return combine([ right ], ([ value ], input, env) => {
-				const editor = new intrinsics.Editor(input);
-				for (const [ path ] of paths([], input, env)) {
-					editor.set(path, combineWith(editor.get(path), value!));
 				}
-				return editor.result();
-			});
+			}
 		},
 	},
 	if: {
@@ -445,13 +455,14 @@ export const runtime: Runtime = {
 			const otherwise = node.else === null ? identityFilter : branch(node.else);
 			if (!isStream(condition) && !isStream(then) && !isStream(otherwise)) {
 				return (input, env) => truthy(condition(input, env)) ? then(input, env) : otherwise(input, env);
+			} else {
+				const thens = generator(then);
+				const otherwises = generator(otherwise);
+				const branched = over(generator(condition), function*(test, input, env) {
+					yield* truthy(test) ? thens(input, env) : otherwises(input, env);
+				});
+				return isTask(thens) || isTask(otherwises) ? task(branched) : branched;
 			}
-			const thens = generator(then);
-			const otherwises = generator(otherwise);
-			const branched = over(generator(condition), function*(test, input, env) {
-				yield* truthy(test) ? thens(input, env) : otherwises(input, env);
-			});
-			return isTask(thens) || isTask(otherwises) ? task(branched) : branched;
 		},
 		path: (node, render) => {
 			const conditions = generator(render.filter(node.condition));
@@ -483,8 +494,9 @@ export const runtime: Runtime = {
 					yield* feed(body(input, env), value => elements.push(value));
 					yield elements;
 				});
+			} else {
+				return (input, env) => [ ...body(input, env) ];
 			}
-			return (input, env) => [ ...body(input, env) ];
 		},
 	},
 	object: {
@@ -515,16 +527,17 @@ function logical(node: ast.Logical, render: Render, short: boolean): Filter {
 	const right = render.filter(node.right);
 	if (!isStream(left) && !isStream(right)) {
 		return (input, env) => truthy(left(input, env)) === short ? short : truthy(right(input, env));
+	} else {
+		const rights = over(generator(right), function*(other) {
+			yield truthy(other);
+		});
+		const boths = over(generator(left), function*(value, input, env) {
+			if (truthy(value) === short) {
+				yield short;
+			} else {
+				yield* rights(input, env);
+			}
+		});
+		return isTask(rights) ? task(boths) : boths;
 	}
-	const rights = over(generator(right), function*(other) {
-		yield truthy(other);
-	});
-	const boths = over(generator(left), function*(value, input, env) {
-		if (truthy(value) === short) {
-			yield short;
-		} else {
-			yield* rights(input, env);
-		}
-	});
-	return isTask(rights) ? task(boths) : boths;
 }

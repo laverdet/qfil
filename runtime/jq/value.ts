@@ -45,14 +45,16 @@ function canonical(text: string): string {
 	if (scale <= 0 && adjusted >= -6) {
 		if (scale === 0) {
 			return `${sign}${digits}`;
+		} else {
+			const point = digits.length + scale;
+			return point > 0
+				? `${sign}${digits.slice(0, point)}.${digits.slice(point)}`
+				: `${sign}0.${'0'.repeat(-point)}${digits}`;
 		}
-		const point = digits.length + scale;
-		return point > 0
-			? `${sign}${digits.slice(0, point)}.${digits.slice(point)}`
-			: `${sign}0.${'0'.repeat(-point)}${digits}`;
+	} else {
+		const mantissa = digits.length > 1 ? `${digits[0]}.${digits.slice(1)}` : digits;
+		return `${sign}${mantissa}E${adjusted < 0 ? '-' : '+'}${Math.abs(adjusted)}`;
 	}
-	const mantissa = digits.length > 1 ? `${digits[0]}.${digits.slice(1)}` : digits;
-	return `${sign}${mantissa}E${adjusted < 0 ? '-' : '+'}${Math.abs(adjusted)}`;
 }
 
 /** A number with its spelling, when that says more than the number does. */

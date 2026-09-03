@@ -33,8 +33,9 @@ export const runtime: Runtime = {
 			if (node.handler === null && node.body.type === 'iterate') {
 				// `.[]?`, as the JavaScript runtime special-cases it, over directories too
 				return combineStreams([ render.filter(node.body.target) ], ([ value ]) => iterated(value!, iterateOptional));
+			} else {
+				return js.try.value(node, render);
 			}
-			return js.try.value(node, render);
 		},
 	},
 };

@@ -105,6 +105,7 @@ export function run(source: string, input: Value, options: RunOptions = {}): Val
 			}
 			return outputs;
 		}();
+	} else {
+		return filter.stream ? [ ...filter(input) ] : [ filter(input) ];
 	}
-	return filter.stream ? [ ...filter(input) ] : [ filter(input) ];
 }

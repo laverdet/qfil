@@ -21,8 +21,9 @@ function negate(value: Value): Value {
 	if (value instanceof Spelled) {
 		const { text } = value;
 		return spelled(-Number(value), text.startsWith('-') ? text.slice(1) : `-${text}`);
+	} else {
+		return negateNumber(value);
 	}
-	return negateNumber(value);
 }
 
 export const runtime: Runtime = {

@@ -140,8 +140,9 @@ export function length(value: Value): number {
 		return 0;
 	} else if (Array.isArray(value)) {
 		return value.length;
+	} else {
+		return Object.keys(value).length;
 	}
-	return Object.keys(value).length;
 }
 
 export function add(left: Value, right: Value): Value {
@@ -475,8 +476,9 @@ export function iterateOptional(value: Value): Iterable<Value> {
 		return value;
 	} else if (isObject(value)) {
 		return Object.values(value);
+	} else {
+		return [];
 	}
-	return [];
 }
 
 /** The keys `.[]?` visits: none, for a value with no members. */
