@@ -448,6 +448,16 @@ export function *product(streams: readonly Stream[], input: Value, env: Env, slo
 /** `body` over one value from each filter, for every combination; a single value when every filter is. */
 export function combine(filters: readonly Filter[], body: (values: Value[], input: Value, env: Env) => Value, slowest: 'first' | 'last' = 'first'): Filter {
 	if (allSingle(filters)) {
+		// The hottest path in a compiled program — every binary operator and literal index lands
+		// here — so the one- and two-argument forms skip the per-call `.map`
+		if (filters.length === 1) {
+			const only = filters[0]!;
+			return (input, env) => body([ only(input, env) ], input, env);
+		} else if (filters.length === 2) {
+			const first = filters[0]!;
+			const second = filters[1]!;
+			return (input, env) => body([ first(input, env), second(input, env) ], input, env);
+		}
 		return (input, env) => body(filters.map(filter => filter(input, env)), input, env);
 	}
 	const streams = filters.map(generator);
