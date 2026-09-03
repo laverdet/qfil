@@ -813,17 +813,46 @@ void describe('filters that await', () => {
 			'first(later(1))',
 			'map(later(.))',
 			'sort_by(later(.))',
-			'def f(g): g; f(later(1))',
-			'path(later(.a))',
-			'.a = later(1)',
 		];
 		for (const filter of refused) {
 			assert.throws(() => compile(filter, { lib: slowly }), CompileError, filter);
 		}
 	});
 	void it('locates the refusal', () => {
-		assert.throws(() => compile('.a = later(1)', { lib: slowly }), { message: 'a filter that awaits is not supported here at line 1, column 6' });
-		assert.throws(() => compile('path(later(.a) as $x | .a)', { lib: slowly }), { message: 'a filter that awaits is not supported here at line 1, column 6' });
+		assert.throws(() => compile('limit(1; later(1))', { lib: slowly }), { message: 'a filter that awaits is not supported here at line 1, column 10' });
+		assert.throws(() => compile('sort_by(later(.))', { lib: slowly }), { message: 'a filter that awaits is not supported here at line 1, column 9' });
+	});
+	void it('awaits on the right of an assignment', async () => {
+		assert.equal(tojson(await eventually('.a = later(5)', { a: 1 })), '[{"a":5}]');
+		assert.equal(tojson(await eventually('.a += later(2)', { a: 1 })), '[{"a":3}]');
+		assert.equal(tojson(await eventually('(.a, .b) = later(7)', {})), '[{"a":7,"b":7}]');
+		assert.equal(tojson(await eventually('.a |= later(. + 1)', { a: 1 })), '[{"a":2}]');
+		assert.equal(tojson(await eventually('.[] |= later(. * 2)', [ 1, 2 ])), '[[2,4]]');
+		assert.equal(tojson(await eventually('.a |= (later(.) | empty)', { a: 1, b: 2 })), '[{"b":2}]');
+	});
+	void it('awaits in path mode', async () => {
+		assert.deepEqual(await eventually('path(.[later(0)])', [ 5 ]), [ [ 0 ] ]);
+		assert.deepEqual(await eventually('[path(if later(true) then .a else .b end)]'), [ [ [ 'a' ] ] ]);
+		assert.equal(tojson(await eventually('del(.[later(1)])', [ 1, 2, 3 ])), '[[1,3]]');
+		assert.deepEqual(await eventually('[path(later(.) as $x | .a)]'), [ [ [ 'a' ] ] ]);
+		assert.deepEqual(await eventually('path(first(.[later(0)], .a))', [ 9 ]), [ [ 0 ] ]);
+		assert.deepEqual(await eventually('[path(limit(2; .[later(0)], .[1], .[2]))]', [ 9 ]), [ [ [ 0 ], [ 1 ] ] ]);
+		assert.deepEqual(await eventually('path(reduce (later("a"), "b") as $k (.; .[$k]))'), [ [ 'a', 'b' ] ]);
+		assert.equal(tojson(await eventually('.[later(0):2] = ["x"]', [ 1, 2, 3 ])), '[["x",3]]');
+		await assert.rejects(eventually('path(later(1))'), (error: Error) => error.message.includes('Invalid path expression'));
+	});
+	void it('awaits through filter parameters', async () => {
+		assert.deepEqual(await eventually('def f(g): g + 1; f(later(1))'), [ 2 ]);
+		assert.deepEqual(await eventually('def f(g): [g]; f(later(1), 2)'), [ [ 1, 2 ] ]);
+		assert.deepEqual(await eventually('def f(g): g + g; f(later(1), 10)'), [ 2, 11, 11, 20 ]);
+		assert.deepEqual(await eventually('def f(g): g; def h(i): f(i); h(later(3))'), [ 3 ]);
+		assert.deepEqual(await eventually('def f(g): g + 0; f(1) + f(later(2))'), [ 3 ]);
+		assert.deepEqual(await eventually('def f(g): if . > 0 then . - 1 | f(g) else g end; f(later("x"))', 3), [ 'x' ]);
+		assert.deepEqual(await eventually('def f($x): $x + 1; f(later(9))'), [ 10 ]);
+		assert.deepEqual(await eventually('def sel(c): if c then . else empty end; [path(.[] | sel(later(. > 1)))]', [ 1, 2, 3 ]), [ [ [ 1 ], [ 2 ] ] ]);
+	});
+	void it('bounces tail calls with an awaiting parameter', async () => {
+		assert.deepEqual(await eventually('def f(g): if . <= 0 then g else . - 1 | f(g) end; 100000 | f(later("deep"))'), [ 'deep' ]);
 	});
 });
 
@@ -850,6 +879,9 @@ void describe('tail calls', () => {
 	});
 	void it('binds on the way down', () => {
 		assert.deepEqual(results('def f: if . > 0 then ((. - 1) as $n | $n | f) else "bound" end; f', 100000), [ 'bound' ]);
+	});
+	void it('passes a filter parameter down a deep recursion', () => {
+		assert.deepEqual(results('def f(g): if . <= 0 then g else . - 1 | f(g) end; 1000000 | f(42)'), [ 42 ]);
 	});
 	void it('leaves non-tail recursion alone', () => {
 		assert.deepEqual(results('def fib: if . < 2 then . else (. - 1 | fib) + (. - 2 | fib) end; fib', 15), [ 610 ]);

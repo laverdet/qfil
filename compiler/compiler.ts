@@ -17,8 +17,12 @@ import { Bounce, Break, CompileError, Tail, allSingle, driven, each, feed, gener
 
 /** A definition: the filters of its body, called with its own frame and its parameters pushed on the environment it closed over. */
 interface Definition {
+	/** The body with no awaiting filter arguments; `variant` holds the others. */
 	readonly value: Filter;
+	/** The body for a set of awaiting filter arguments, a bit per filter parameter; call sites render what they need at compile time. */
+	readonly variant: (bitmap: number) => Filter;
 	readonly path: PathFilter;
+	readonly pathVariant: (bitmap: number) => PathFilter;
 }
 
 /** What a definition is at runtime: the environment it was evaluated in, to be extended per call. */
@@ -44,24 +48,47 @@ interface Callee {
 	readonly streams: boolean;
 	/** Whether a value argument awaits, making the environments a task's yields. */
 	readonly task: boolean;
+	/** The awaiting filter arguments, a bit per filter parameter: which body variant the call needs. */
+	readonly params: number;
 }
 
-/** A definition as the compiler sees it: where its frame sits, and the shape of a call to it. */
+/** One rendering of a definition's body, for one set of awaiting filter arguments. */
+interface Variant {
+	/** Undefined while the body is rendered; a self-call then assumes a single value and says so. */
+	shape: 'single' | 'stream' | 'task' | undefined;
+	assumed: boolean;
+	/** Whether a call may come to a `Bounce` or a `Tail`: a tail call was compiled in this body. */
+	bouncy: boolean;
+	value: Filter | undefined;
+}
+
+/** As {@link Variant}, for the path form: all that varies there is whether it awaits. */
+interface PathVariant {
+	/** Undefined while rendered; a self-call in path mode then assumes it does not await. */
+	awaits: boolean | undefined;
+	assumed: boolean;
+	path: PathFilter | undefined;
+}
+
+/** A definition as the compiler sees it: where its frame sits, and its body's renderings. */
 interface DefBinding {
 	readonly kind: 'def';
 	readonly slot: number;
 	readonly def: ast.Def;
-	/** Undefined while the body is rendered; a self-call then assumes a single value and says so. */
-	shape: 'single' | 'stream' | 'task' | undefined;
-	assumed: boolean;
-	/** Whether a call may come to a `Bounce` or a `Tail`: a tail call was compiled in its body. */
-	bouncy: boolean;
+	/** The body per set of awaiting filter arguments, a bit per filter parameter. */
+	readonly variants: Map<number, Variant>;
+	readonly pathVariants: Map<number, PathVariant>;
+	/** Renders the body for a bitmap; set by `def` once the body's scope exists. */
+	render?: (bitmap: number) => Filter;
+	renderPath?: (bitmap: number) => PathFilter;
 }
 
 /** A filter parameter: its frame holds a closure. */
 interface ParamBinding {
 	readonly kind: 'param';
 	readonly slot: number;
+	/** Whether the argument awaits, in the body variant being rendered. */
+	task: boolean;
 }
 
 /** A value parameter called as a function: `def f($x): x` reads the variable. */
@@ -285,8 +312,8 @@ class Compiler {
 	private readonly lib: Lib;
 	private readonly ctx: Context;
 	private synthetics = 0;
-	/** The definition whose body is being rendered: whom a compiled tail call makes bouncy. */
-	private rendering: DefBinding | null = null;
+	/** The body variant being rendered: whom a compiled tail call makes bouncy. */
+	private rendering: Variant | null = null;
 
 	constructor(source: string, runtime: Runtime, lib: Lib, ctx: Context) {
 		this.source = source;
@@ -365,12 +392,12 @@ class Compiler {
 			case 'foreach':
 				return this.pathForeach(node, scope);
 			case 'variable': case 'break':
-				return this.invalid(this.value(node, scope), node.at);
+				return this.invalid(this.value(node, scope));
 			case 'identity': case 'recurse': case 'literal': case 'string': case 'format': case 'index': case 'slice': case 'iterate': case 'try':
 			case 'pipe': case 'comma': case 'binary': case 'and': case 'or': case 'alternative': case 'negate': case 'assign': case 'if': case 'loc': case 'array': case 'object': {
 				const handler = this.handler(node);
 				return handler.path === undefined
-					? this.invalid(handler.value(node, this.renderer(scope)), node.at)
+					? this.invalid(handler.value(node, this.renderer(scope)))
 					: handler.path(node, this.renderer(scope));
 			}
 		}
@@ -403,9 +430,16 @@ class Compiler {
 	}
 
 	/** A filter that is not a path expression, as a path filter: each value it yields is the runtime's invalid path. */
-	private invalid(filter: Filter, at?: number): PathFilter {
+	private invalid(filter: Filter): PathFilter {
 		const { invalidPath } = this.rt;
-		const stream = generator(this.strict(filter, at));
+		const stream = generator(filter);
+		if (isTask(stream)) {
+			return task(function*(_path, value, env) {
+				yield* each(stream(value, env), function*(output) {
+					yield invalidPath(output);
+				});
+			});
+		}
 		return function*(_path, value, env) {
 			for (const output of stream(value, env)) {
 				yield invalidPath(output);
@@ -481,11 +515,13 @@ class Compiler {
 		switch (binding.kind) {
 			case 'value':
 				return (_input, env) => lookup(env, distance) as Value;
-			case 'param':
-				return function*(input, env) {
+			case 'param': {
+				const site: Stream = function*(input, env) {
 					const bound = lookup(env, distance) as BoundClosure;
 					yield* bound.closure.generator(input, bound.env);
 				};
+				return binding.task ? task(site) : site;
+			}
 			case 'def':
 				return this.callDef(binding, node, scope, tail);
 		}
@@ -499,88 +535,131 @@ class Compiler {
 		const distance = scope.distance(binding.slot);
 		switch (binding.kind) {
 			case 'value':
-				return this.invalid(this.call(node, scope), node.at);
-			case 'param':
-				return function*(path, value, env) {
+				return this.invalid(this.call(node, scope));
+			case 'param': {
+				const site: PathFilter = function*(path, value, env) {
 					const bound = lookup(env, distance) as BoundClosure;
 					yield* bound.closure.path(path, value, bound.env);
 				};
+				return binding.task ? task(site) : site;
+			}
 			case 'def': {
 				const callee = this.callee(binding, node, scope);
-				if (callee.task) {
-					throw this.error('a filter that awaits is not supported here', node.at);
+				const variant = this.pathVariant(binding, callee.params);
+				if (variant.awaits === undefined) {
+					// The variant's own path form is being rendered: assume it does not await
+					variant.assumed = true;
 				}
-				return function*(path, value, env) {
-					const bound = lookup(env, distance) as Bound;
-					for (const frames of callee(bound, env, value)) {
-						yield* bound.definition.path(path, value, frames);
+				const paths = callee.params === 0
+					? (bound: Bound) => bound.definition.path
+					: (bound: Bound) => bound.definition.pathVariant(callee.params);
+				const called: PathFilter = callee.task
+					? function*(path, value, env) {
+						const bound = lookup(env, distance) as Bound;
+						yield* each(callee(bound, env, value), function*(frames) {
+							yield* paths(bound)(path, value, frames);
+						});
 					}
-				};
+					: function*(path, value, env) {
+						const bound = lookup(env, distance) as Bound;
+						for (const frames of callee(bound, env, value)) {
+							yield* paths(bound)(path, value, frames);
+						}
+					};
+				return callee.task || variant.awaits === true ? task(called) : called;
 			}
 		}
+	}
+
+	/** The body variant a call's awaiting filter arguments select, rendered on first need. */
+	private variant(binding: DefBinding, bitmap: number): Variant {
+		const existing = binding.variants.get(bitmap);
+		if (existing !== undefined) {
+			return existing;
+		}
+		if (binding.render === undefined) {
+			throw new Error('Impossible: a call before its definition was reached');
+		}
+		binding.render(bitmap);
+		return binding.variants.get(bitmap)!;
+	}
+
+	/** As {@link variant}, for the path form. */
+	private pathVariant(binding: DefBinding, bitmap: number): PathVariant {
+		const existing = binding.pathVariants.get(bitmap);
+		if (existing !== undefined) {
+			return existing;
+		}
+		if (binding.renderPath === undefined) {
+			throw new Error('Impossible: a call before its definition was reached');
+		}
+		binding.renderPath(bitmap);
+		return binding.pathVariants.get(bitmap)!;
 	}
 
 	/** A call to a definition: its frame, then each argument, pushed on the environment it closed over. */
 	private callDef(binding: DefBinding, node: ast.Call, scope: Scope, tail: boolean): Filter {
 		const distance = scope.distance(binding.slot);
 		const callee = this.callee(binding, node, scope);
-		if (binding.shape === undefined) {
-			// The definition's own body is being rendered: assume a single value, and be told if not
-			binding.assumed = true;
+		const variant = this.variant(binding, callee.params);
+		const body = callee.params === 0
+			? (bound: Bound) => bound.definition.value
+			: (bound: Bound) => bound.definition.variant(callee.params);
+		if (variant.shape === undefined) {
+			// The variant's own body is being rendered: assume a single value, and be told if not
+			variant.assumed = true;
 		}
-		if (tail && !callee.streams && (binding.shape === undefined || binding.bouncy)) {
+		if (tail && !callee.streams && (variant.shape === undefined || variant.bouncy)) {
 			// A tail call into a recursion: hand the consumer the next step instead of taking a
-			// stack frame for it. The definition being rendered is bouncy now — its non-tail call
+			// stack frame for it. The variant being rendered is bouncy now — its non-tail call
 			// sites follow the chain, each on its one frame.
 			const rendering = this.rendering ?? function(): never {
 				throw new Error('Impossible: a tail call outside a definition');
 			}();
 			rendering.bouncy = true;
-			if (binding.shape === undefined || binding.shape === 'single') {
+			if (variant.shape === undefined || variant.shape === 'single') {
 				return (input, env) => {
 					const bound = lookup(env, distance) as Bound;
 					const [ frames ] = callee(bound, env, input);
 					// Single-valued, as the shape says; a `Bounce` travels as a `Value`
-					return new Bounce(bound.definition.value as Single, input, frames!) as unknown as Value;
+					return new Bounce(body(bound) as Single, input, frames!) as unknown as Value;
 				};
 			}
 			return function*(input, env) {
 				const bound = lookup(env, distance) as Bound;
 				const [ frames ] = callee(bound, env, input);
-				yield new Tail(() => (bound.definition.value as Stream)(input, frames!)) as unknown as Value;
+				yield new Tail(() => (body(bound) as Stream)(input, frames!)) as unknown as Value;
 			};
 		}
-		if (binding.shape === 'stream' || binding.shape === 'task' || callee.streams) {
-			const apply = binding.bouncy ? settling : invoke;
+		if (variant.shape === 'stream' || variant.shape === 'task' || callee.streams) {
+			const apply = variant.bouncy ? settling : invoke;
 			const called = callee.task
 				? function*(input: Value, env: Env): Generator<Value, void, Resumed> {
 					const bound = lookup(env, distance) as Bound;
-					const body = bound.definition.value;
 					yield* each(callee(bound, env, input), function*(frames) {
-						yield* apply(body, input, frames);
+						yield* apply(body(bound), input, frames);
 					});
 				}
 				: function*(input: Value, env: Env): Generator<Value, void, Resumed> {
 					const bound = lookup(env, distance) as Bound;
-					const body = bound.definition.value;
 					for (const frames of callee(bound, env, input)) {
-						yield* apply(body, input, frames);
+						yield* apply(body(bound), input, frames);
 					}
 				};
-			return binding.shape === 'task' || callee.task ? task(called) : called;
+			return variant.shape === 'task' || callee.task ? task(called) : called;
 		}
-		if (binding.bouncy) {
+		if (variant.bouncy) {
 			return (input, env) => {
 				const bound = lookup(env, distance) as Bound;
 				const [ frames ] = callee(bound, env, input);
-				return settle((bound.definition.value as Single)(input, frames!));
+				return settle((body(bound) as Single)(input, frames!));
 			};
 		}
 		return (input, env) => {
 			const bound = lookup(env, distance) as Bound;
 			const [ frames ] = callee(bound, env, input);
 			// Settled as single-valued above, once the body was rendered
-			return (bound.definition.value as Single)(input, frames!);
+			return (body(bound) as Single)(input, frames!);
 		};
 	}
 
@@ -593,10 +672,27 @@ class Compiler {
 	 */
 	private callee(binding: DefBinding, node: ast.Call, scope: Scope): Callee {
 		const filters: Filter[] = [];
+		let params = 0;
+		let filterIndex = 0;
 		const frames = binding.def.params.map((param, ii): (env: Env, values: Value[]) => unknown => {
 			const arg = node.args[ii]!;
 			if (!param.value) {
+				const passed = this.passedParam(arg, scope);
+				if (passed !== undefined) {
+					// `f(g)` where `g` is itself a parameter: the caller's closure passes through
+					// unwrapped, so a recursion hands the same closure all the way down
+					if (passed.task) {
+						params |= 1 << filterIndex;
+					}
+					filterIndex += 1;
+					const distance = scope.distance(passed.slot);
+					return env => lookup(env, distance);
+				}
 				const closure = this.closure(arg, scope);
+				if (isTask(closure.generator)) {
+					params |= 1 << filterIndex;
+				}
+				filterIndex += 1;
 				return env => ({ closure, env } satisfies BoundClosure);
 			}
 			const position = filters.push(this.value(arg, scope)) - 1;
@@ -612,7 +708,7 @@ class Compiler {
 		if (allSingle(filters)) {
 			const singles: readonly Single[] = filters;
 			const callee = (bound: Bound, env: Env, input: Value): Env[] => [ build(bound, env, singles.map(filter => filter(input, env))) ];
-			return Object.assign(callee, { streams: false, task: false });
+			return Object.assign(callee, { streams: false, task: false, params });
 		}
 		const streams = filters.map(generator);
 		const awaits = filters.some(isTask);
@@ -627,7 +723,16 @@ class Compiler {
 					yield build(bound, env, values);
 				}
 			};
-		return Object.assign(callee, { streams: true, task: awaits });
+		return Object.assign(callee, { streams: true, task: awaits, params });
+	}
+
+	/** The filter parameter a zero-argument call names, when the argument is exactly that. */
+	private passedParam(arg: ast.Node, scope: Scope): ParamBinding | undefined {
+		if (arg.type !== 'call' || arg.args.length > 0) {
+			return undefined;
+		}
+		const found = scope.func(`${arg.name}/0`);
+		return found?.kind === 'param' ? found : undefined;
 	}
 
 	/** A filter argument's forms. The path form is rendered when first asked for, which is usually never. */
@@ -635,7 +740,7 @@ class Compiler {
 		const render = this.renderer(scope);
 		let path: PathFilter | undefined;
 		return {
-			generator: render.generator(arg),
+			generator: generator(render.filter(arg)),
 			get path() {
 				path ??= render.path(arg);
 				return path;
@@ -653,9 +758,10 @@ class Compiler {
 	 */
 	private def<Result>(node: ast.Def, scope: Scope, rest: (inner: Scope, definition: Definition) => Result, assemble: (rest: Result, definition: Definition) => Result): Result {
 		const key = `${node.name}/${node.params.length}`;
-		const binding: DefBinding = { kind: 'def', slot: scope.depth, def: node, shape: undefined, assumed: false, bouncy: false };
+		const binding: DefBinding = { kind: 'def', slot: scope.depth, def: node, variants: new Map(), pathVariants: new Map() };
 		const inner = scope.child();
 		inner.funcs.set(key, binding);
+		const filterParams: ParamBinding[] = [];
 		let bodyScope = inner;
 		for (const param of node.params) {
 			const slot = bodyScope.depth;
@@ -664,29 +770,76 @@ class Compiler {
 				bodyScope.vars.set(param.name, slot);
 				bodyScope.funcs.set(`${param.name}/0`, { kind: 'value', slot });
 			} else {
-				bodyScope.funcs.set(`${param.name}/0`, { kind: 'param', slot });
+				const paramBinding: ParamBinding = { kind: 'param', slot, task: false };
+				filterParams.push(paramBinding);
+				bodyScope.funcs.set(`${param.name}/0`, paramBinding);
 			}
 		}
-		const outer = this.rendering;
-		this.rendering = binding;
-		// The body itself is the definition's last act: a recursive call there is a tail call
-		let value = this.value(node.body, bodyScope, true);
-		if (binding.assumed && (shapeOf(value) !== 'single' || binding.bouncy)) {
-			// A self-call assumed a single, non-bouncy body and it is not that: settle and render again
-			binding.shape = shapeOf(value);
-			value = this.value(node.body, bodyScope, true);
-		}
-		binding.shape = shapeOf(value);
-		this.rendering = outer;
-		let path: PathFilter | undefined;
-		const render = this.renderer(bodyScope);
+		// A variant renders with each filter parameter told whether its argument awaits; renders
+		// nest — a self-call may need another variant mid-render — so the flags are restored after
+		const withParams = <Type>(bitmap: number, render: () => Type): Type => {
+			const saved = filterParams.map(param => param.task);
+			filterParams.forEach((param, ii) => {
+				param.task = ((bitmap >> ii) & 1) === 1;
+			});
+			try {
+				return render();
+			} finally {
+				filterParams.forEach((param, ii) => {
+					param.task = saved[ii]!;
+				});
+			}
+		};
+		const renderBody = (bitmap: number): Filter => {
+			const variant: Variant = { shape: undefined, assumed: false, bouncy: false, value: undefined };
+			binding.variants.set(bitmap, variant);
+			return withParams(bitmap, () => {
+				const outer = this.rendering;
+				this.rendering = variant;
+				// The body itself is the definition's last act: a recursive call there is a tail call
+				let value = this.value(node.body, bodyScope, true);
+				if (variant.assumed && (shapeOf(value) !== 'single' || variant.bouncy)) {
+					// A self-call assumed a single, non-bouncy body and it is not that: settle and render again
+					variant.shape = shapeOf(value);
+					value = this.value(node.body, bodyScope, true);
+				}
+				variant.shape = shapeOf(value);
+				variant.value = value;
+				this.rendering = outer;
+				return value;
+			});
+		};
+		const renderPath = (bitmap: number): PathFilter => {
+			const variant: PathVariant = { awaits: undefined, assumed: false, path: undefined };
+			binding.pathVariants.set(bitmap, variant);
+			return withParams(bitmap, () => {
+				let path = this.path(node.body, bodyScope);
+				if (variant.assumed && isTask(path)) {
+					// A self-call in path mode assumed no awaiting and there is some: render again
+					variant.awaits = true;
+					path = this.path(node.body, bodyScope);
+				}
+				variant.awaits = isTask(path);
+				variant.path = path;
+				return path;
+			});
+		};
+		binding.render = renderBody;
+		binding.renderPath = renderPath;
+		const value = renderBody(0);
+		const pathOf = (bitmap: number): PathFilter => this.pathVariant(binding, bitmap).path ?? function(): never {
+			throw new Error('Impossible: an unrendered path variant');
+		}();
 		const definition: Definition = {
 			value,
+			variant: bitmap => this.variant(binding, bitmap).value ?? function(): never {
+				throw new Error('Impossible: an unrendered variant');
+			}(),
 			// The path form of the body is rendered when a call in path mode first asks for it
 			get path() {
-				path ??= render.path(node.body);
-				return path;
+				return pathOf(0);
 			},
+			pathVariant: pathOf,
 		};
 		return assemble(rest(inner, definition), definition);
 	}
@@ -701,10 +854,12 @@ class Compiler {
 		return (input, env) => rest(input, push(env, { definition, env } satisfies Bound));
 	};
 
-	private readonly restPath = (rest: PathFilter, definition: Definition): PathFilter =>
-		function*(path, value, env) {
+	private readonly restPath = (rest: PathFilter, definition: Definition): PathFilter => {
+		const defined: PathFilter = function*(path, value, env) {
 			yield* rest(path, value, push(env, { definition, env } satisfies Bound));
 		};
+		return isTask(rest) ? task(defined) : defined;
+	};
 
 	// -- Binding forms --
 
@@ -735,14 +890,21 @@ class Compiler {
 		if (desugared !== node) {
 			return this.path(desugared, scope);
 		}
-		const sources = this.strict(this.generator(node.source, scope), node.source.at);
+		const sources = this.generator(node.source, scope);
 		const inner = scope.withVariable(simplePattern(node.patterns)!.name);
 		const body = this.path(node.body, inner);
-		return function*(path, value, env) {
-			for (const bound of sources(value, env)) {
-				yield* body(path, value, push(env, bound));
-			}
-		};
+		const bound: PathFilter = isTask(sources)
+			? task(function*(path, value, env) {
+				yield* each(sources(value, env), function*(item) {
+					yield* body(path, value, push(env, item));
+				});
+			})
+			: function*(path, value, env) {
+				for (const item of sources(value, env)) {
+					yield* body(path, value, push(env, item));
+				}
+			};
+		return isTask(body) ? task(bound) : bound;
 	}
 
 	/**
@@ -824,12 +986,15 @@ class Compiler {
 			return this.path(this.desugarFold(node), scope);
 		}
 		const inits = this.path(node.init, scope);
-		const sources = this.strict(this.generator(node.source, scope), node.source.at);
+		const sources = this.generator(node.source, scope);
 		const updates = this.path(node.update, inner);
 		const { invalidPath } = this.rt;
-		return function*(path, value, env) {
-			yield* reduce(inits(path, value, env), () => sources(value, env), env, ([ at, state ], bound) => updates(at, state, bound), () => invalidPath(null));
+		const awaits = isTask(inits) || isTask(sources) || isTask(updates);
+		const fold = awaits ? taskReduce : reduce;
+		const folded: PathFilter = function*(path, value, env) {
+			yield* fold(inits(path, value, env), () => sources(value, env), env, ([ at, state ], bound) => updates(at, state, bound), () => invalidPath(null));
 		};
+		return awaits ? task(folded) : folded;
 	}
 
 	/** `foreach source as $x (init; update; extract)`: every intermediate state, through the extract when there is one. */
@@ -857,11 +1022,13 @@ class Compiler {
 			return this.path(this.desugarFold(node), scope);
 		}
 		const inits = this.path(node.init, scope);
-		const sources = this.strict(this.generator(node.source, scope), node.source.at);
+		const sources = this.generator(node.source, scope);
 		const updates = this.path(node.update, inner);
 		const extracts = node.extract === null ? null : this.path(node.extract, inner);
-		return function*(path, value, env) {
-			yield* foreach(
+		const awaits = isTask(inits) || isTask(sources) || isTask(updates) || (extracts !== null && isTask(extracts));
+		const fold = awaits ? taskForeach : foreach;
+		const folded: PathFilter = function*(path, value, env) {
+			yield* fold(
 				inits(path, value, env),
 				() => sources(value, env),
 				env,
@@ -869,6 +1036,7 @@ class Compiler {
 				extracts === null ? null : ([ at, state ], bound) => extracts(at, state, bound),
 			);
 		};
+		return awaits ? task(folded) : folded;
 	}
 
 	/** The scope a fold's update and extract run in, the item bound; undefined when the pattern is one to desugar first. */
@@ -910,7 +1078,7 @@ class Compiler {
 		const inner = scope.child();
 		inner.labels.set(node.name, scope.depth);
 		const body = this.path(node.body, inner);
-		return function*(path, value, env) {
+		const labeled: PathFilter = function*(path, value, env) {
 			const token = {};
 			try {
 				yield* body(path, value, push(env, token));
@@ -920,6 +1088,7 @@ class Compiler {
 				}
 			}
 		};
+		return isTask(body) ? task(labeled) : labeled;
 	}
 
 	private breakOut(node: ast.Break, scope: Scope): Filter {

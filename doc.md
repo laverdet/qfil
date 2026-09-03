@@ -155,10 +155,14 @@ shape; `run` still returns an array when nothing awaited and a promise of one on
 Whether a filter is a task is read off the function at instantiation, as `isStream` is: a
 construct over a task builds an `Await`-forwarding loop (`each`), everything else keeps its plain
 loop, and a single value keeps its plain call — a program with nothing to await compiles exactly
-as before. `render.value` and `render.generator` refuse a task, so a library function that runs a
-stream itself — `limit`, `first`, a filter parameter's closure — rejects an awaiting argument at
-compile time rather than mistaking an `Await` for a value at runtime; `render.filter` is the
-opt-in the task-aware constructs use.
+as before. That covers the whole language: path expressions and assignment build forwarding loops
+when something under them awaits (`.a = later(1)`, `del(.[later(1)])`, `path(… as $x | …)`), and
+a definition passes tasks through its filter parameters — the body is rendered once per set of
+awaiting arguments, a bit per filter parameter, so `def f(g): g` forwards `f(later(1))` while
+`f(1)` compiles exactly as it always did. `render.value` and `render.generator` refuse a task,
+so a library function that runs a stream itself — `limit`, `first`, `map`, `sort_by` — rejects
+an awaiting argument at compile time rather than mistaking an `Await` for a value at runtime;
+`render.filter` is the opt-in the task-aware constructs use.
 
 ### The filesystem runtime
 

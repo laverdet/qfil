@@ -142,13 +142,13 @@ export type Resumed = Value | undefined;
 
 const taskShape: unique symbol = Symbol('jssq.task');
 
-/** Marks a stream as a task: one that may yield an `Await` among its values. */
-export function task<Fn extends Stream>(fn: Fn): Fn {
+/** Marks a stream — of values, of paths — as a task: one that may yield an `Await` among its items. */
+export function task<Fn extends (...args: never) => Iterable<unknown>>(fn: Fn): Fn {
 	return Object.assign(fn, { [taskShape]: true });
 }
 
 /** Whether a filter may yield `Await`s, read off the function itself as `isStream` is. A task is always a stream. */
-export function isTask(fn: Filter | PathFilter): boolean {
+export function isTask(fn: (...args: never) => unknown): boolean {
 	return (fn as { readonly [taskShape]?: boolean })[taskShape] === true;
 }
 
@@ -157,7 +157,7 @@ export function isTask(fn: Filter | PathFilter): boolean {
  * rejection into it, where the stream's own `try` may catch it. Only a settlement arrives at the
  * forwarding yield, so an error coming out of this frame is the stream's own.
  */
-function *forward<Item, Out>(waiting: Await, iterator: Iterator<Item, unknown, Resumed>): Generator<Out, IteratorResult<Item, unknown>, Resumed> {
+export function *forward<Item, Out>(waiting: Await, iterator: Iterator<Item, unknown, Resumed>): Generator<Out, IteratorResult<Item, unknown>, Resumed> {
 	try {
 		// A forwarded instruction is invisible to the types, as it is to every frame it passes
 		return iterator.next(yield waiting as unknown as Out);
@@ -208,19 +208,41 @@ export function feed<Item>(iterable: Iterable<Item>, body: (item: Item) => void)
 }
 
 /**
- * `body` over each value of `stream`: a plain loop when the stream cannot await, `each` when it
- * may. The result is a task only when the stream is one; a caller whose body awaits marks the
- * result itself.
+ * The first item of a stream that may await, its `Await`s forwarded along the way; `undefined`
+ * when there is none. The stream is closed either way, as taking the first output must.
  */
-export function over(stream: Stream, body: (value: Value, input: Value, env: Env) => Generator<Value, void, Resumed>): Stream {
-	if (isTask(stream)) {
-		return task(function*(input, env) {
-			yield* each(stream(input, env), value => body(value, input, env));
+export function *firstOf<Item>(outputs: Iterable<Item>): Generator<never, Item | undefined, Resumed> {
+	const iterator = outputs[Symbol.iterator]() as Iterator<Item, unknown, Resumed>;
+	try {
+		let next = iterator.next();
+		while (next.done !== true) {
+			const item = next.value;
+			if (item instanceof Await) {
+				next = yield* forward(item, iterator);
+			} else {
+				return item;
+			}
+		}
+		return undefined;
+	} finally {
+		iterator.return?.();
+	}
+}
+
+/**
+ * `body` over each item `source` yields — a value stream, a path stream: a plain loop when the
+ * source cannot await, `each` when it may. The result carries the source's brand; a caller whose
+ * body awaits marks the result itself.
+ */
+export function over<Args extends readonly unknown[], Item, Out>(source: (...args: Args) => Iterable<Item>, body: (item: Item, ...args: Args) => Generator<Out, void, Resumed>): (...args: Args) => Generator<Out, void, Resumed> {
+	if (isTask(source)) {
+		return task(function*(...args: Args) {
+			yield* each(source(...args), item => body(item, ...args));
 		});
 	}
-	return function*(input, env) {
-		for (const value of stream(input, env)) {
-			yield* body(value, input, env);
+	return function*(...args: Args) {
+		for (const item of source(...args)) {
+			yield* body(item, ...args);
 		}
 	};
 }

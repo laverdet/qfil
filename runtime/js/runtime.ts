@@ -9,7 +9,7 @@ import type * as ast from '#/compiler/ast.js';
 import type { Filter, Handler, Path, PathFilter, Render, Runtime, Stream, Value } from '#/compiler/filter.js';
 import * as intrinsics from './intrinsics.js';
 import { JqError, compare, equal, newObject, tostring, truthy } from './value.js';
-import { CompileError, combine, combineStreams, each, feed, generator, isStream, isTask, over, task } from '#/compiler/filter.js';
+import { CompileError, combine, combineStreams, each, feed, firstOf, generator, isStream, isTask, over, task } from '#/compiler/filter.js';
 
 export type Operators = Readonly<Record<ast.BinaryOperator, (left: Value, right: Value) => Value>>;
 
@@ -53,8 +53,17 @@ function extend(path: Path, key: Value): Path {
 
 /** One key of a path expression: the key evaluated against the input, then the target's paths each extended by it. */
 function pathThrough(render: Render, target: ast.Node, key: ast.Node, read: (value: Value, key: Value) => Value, extension: (key: Value) => Value): PathFilter {
-	const keys = render.generator(key);
+	const keys = generator(render.filter(key));
 	const targets = render.path(target);
+	if (isTask(keys) || isTask(targets)) {
+		return task(function*(path, value, env) {
+			yield* each(keys(value, env), function*(kk) {
+				yield* each(targets(path, value, env), function*(pair) {
+					yield [ extend(pair[0], extension(kk)), read(pair[1], kk) ] as [ Path, Value ];
+				});
+			});
+		});
+	}
 	return function*(path, value, env) {
 		for (const kk of keys(value, env)) {
 			for (const [ pp, vv ] of targets(path, value, env)) {
@@ -139,12 +148,22 @@ export const runtime: Runtime = {
 		),
 		path: (node, render) => {
 			const bounds = combineStreams([
-				render.value(node.to ?? nullLiteral),
-				render.value(node.from ?? nullLiteral),
+				render.filter(node.to ?? nullLiteral),
+				render.filter(node.from ?? nullLiteral),
 			], function*([ to, from ]) {
 				yield { __proto__: null, start: from!, end: to! };
 			}, 'last');
 			const targets = render.path(node.target);
+			if (isTask(bounds) || isTask(targets)) {
+				return task(function*(path, value, env) {
+					yield* each(bounds(value, env), function*(bound) {
+						const { start, end } = bound as { start: Value; end: Value };
+						yield* each(targets(path, value, env), function*(pair) {
+							yield [ extend(pair[0], bound), intrinsics.slice(pair[1], start, end) ] as [ Path, Value ];
+						});
+					});
+				});
+			}
 			return function*(path, value, env) {
 				for (const bound of bounds(value, env)) {
 					const { start, end } = bound as { start: Value; end: Value };
@@ -159,13 +178,12 @@ export const runtime: Runtime = {
 		value: (node, render) => combineStreams([ render.filter(node.target) ], ([ value ]) => intrinsics.iterate(value!)),
 		path: (node, render) => {
 			const targets = render.path(node.target);
-			return function*(path, value, env) {
-				for (const [ pp, vv ] of targets(path, value, env)) {
-					for (const key of intrinsics.keysOf(vv)) {
-						yield [ extend(pp, key), intrinsics.index(vv, key) ];
-					}
+			return over(targets, function*(pair) {
+				const [ pp, vv ] = pair;
+				for (const key of intrinsics.keysOf(vv)) {
+					yield [ extend(pp, key), intrinsics.index(vv, key) ] as [ Path, Value ];
 				}
-			};
+			});
 		},
 	},
 	try: {
@@ -207,17 +225,16 @@ export const runtime: Runtime = {
 		path: (node, render) => {
 			if (node.handler === null && node.body.type === 'iterate') {
 				const targets = render.path(node.body.target);
-				return function*(path, value, env) {
-					for (const [ pp, vv ] of targets(path, value, env)) {
-						for (const key of intrinsics.keysOfOptional(vv)) {
-							yield [ extend(pp, key), intrinsics.index(vv, key) ];
-						}
+				return over(targets, function*(pair) {
+					const [ pp, vv ] = pair;
+					for (const key of intrinsics.keysOfOptional(vv)) {
+						yield [ extend(pp, key), intrinsics.index(vv, key) ] as [ Path, Value ];
 					}
-				};
+				});
 			}
 			const body = render.path(node.body);
 			const handler = node.handler === null ? null : render.path(node.handler);
-			return function*(path, value, env) {
+			const tried: PathFilter = function*(path, value, env) {
 				try {
 					yield* body(path, value, env);
 				} catch (error) {
@@ -228,6 +245,7 @@ export const runtime: Runtime = {
 					}
 				}
 			};
+			return isTask(body) || (handler !== null && isTask(handler)) ? task(tried) : tried;
 		},
 	},
 	pipe: {
@@ -253,11 +271,10 @@ export const runtime: Runtime = {
 		path: (node, render) => {
 			const left = render.path(node.left);
 			const right = render.path(node.right);
-			return function*(path, value, env) {
-				for (const [ pp, vv ] of left(path, value, env)) {
-					yield* right(pp, vv, env);
-				}
-			};
+			const piped = over(left, function*(pair, _path, _value, env) {
+				yield* right(pair[0], pair[1], env);
+			});
+			return isTask(right) ? task(piped) : piped;
 		},
 	},
 	comma: {
@@ -274,10 +291,11 @@ export const runtime: Runtime = {
 		path: (node, render) => {
 			const left = render.path(node.left);
 			const right = render.path(node.right);
-			return function*(path, value, env) {
+			const both: PathFilter = function*(path, value, env) {
 				yield* left(path, value, env);
 				yield* right(path, value, env);
 			};
+			return isTask(left) || isTask(right) ? task(both) : both;
 		},
 	},
 	binary: binary(binaries),
@@ -324,6 +342,21 @@ export const runtime: Runtime = {
 		path: (node, render) => {
 			const left = render.path(node.left);
 			const right = render.path(node.right);
+			if (isTask(left) || isTask(right)) {
+				return task(function*(path, value, env) {
+					let found = false;
+					yield* each(left(path, value, env), function*(pair) {
+						if (truthy(pair[1])) {
+							found = true;
+							yield pair;
+						}
+					});
+					// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- set in the `each` body, which narrowing cannot see
+					if (!found) {
+						yield* right(path, value, env);
+					}
+				});
+			}
 			return function*(path, value, env) {
 				let found = false;
 				for (const pair of left(path, value, env)) {
@@ -344,10 +377,25 @@ export const runtime: Runtime = {
 	assign: {
 		value: (node, render) => {
 			const paths = render.path(node.left);
-			const right = render.value(node.right);
+			const right = render.filter(node.right);
 			if (node.op === '|=') {
 				// Each path is updated to the first output of the right, or deleted when there is none
 				const update = generator(right);
+				if (isTask(paths) || isTask(update)) {
+					return task(function*(input, env) {
+						const editor = new intrinsics.Editor(input);
+						const deletions: Path[] = [];
+						yield* each(paths([], input, env), function*(pair) {
+							const output = yield* firstOf(update(editor.get(pair[0]), env));
+							if (output === undefined) {
+								deletions.push(pair[0]);
+							} else {
+								editor.set(pair[0], output);
+							}
+						});
+						yield intrinsics.delpaths(editor.result(), deletions);
+					});
+				}
 				return (input, env) => {
 					const editor = new intrinsics.Editor(input);
 					const deletions: Path[] = [];
@@ -370,6 +418,15 @@ export const runtime: Runtime = {
 				}
 				return binaries[node.op.slice(0, -1) as ast.BinaryOperator];
 			}();
+			if (isTask(paths) || isTask(right)) {
+				return task(over(generator(right), function*(value, input, env) {
+					const editor = new intrinsics.Editor(input);
+					yield* feed(paths([], input, env), pair => {
+						editor.set(pair[0], combineWith(editor.get(pair[0]), value));
+					});
+					yield editor.result();
+				}));
+			}
 			return combine([ right ], ([ value ], input, env) => {
 				const editor = new intrinsics.Editor(input);
 				for (const [ path ] of paths([], input, env)) {
@@ -397,14 +454,21 @@ export const runtime: Runtime = {
 			return isTask(thens) || isTask(otherwises) ? task(branched) : branched;
 		},
 		path: (node, render) => {
-			const conditions = render.generator(node.condition);
+			const conditions = generator(render.filter(node.condition));
 			const then = render.path(node.then);
 			const otherwise = render.path(node.else ?? identity);
-			return function*(path, value, env) {
-				for (const test of conditions(value, env)) {
-					yield* truthy(test) ? then(path, value, env) : otherwise(path, value, env);
-				}
-			};
+			const branched: PathFilter = isTask(conditions)
+				? task(function*(path, value, env) {
+					yield* each(conditions(value, env), function*(test) {
+						yield* truthy(test) ? then(path, value, env) : otherwise(path, value, env);
+					});
+				})
+				: function*(path, value, env) {
+					for (const test of conditions(value, env)) {
+						yield* truthy(test) ? then(path, value, env) : otherwise(path, value, env);
+					}
+				};
+			return isTask(then) || isTask(otherwise) ? task(branched) : branched;
 		},
 	},
 	array: {

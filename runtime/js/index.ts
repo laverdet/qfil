@@ -14,10 +14,10 @@
  * `compile` takes a `lib` option, so an application may supply a library of its own.
  */
 import type * as ast from '#/compiler/ast.js';
-import type { Context, Env, Filter, Lib, LibFunction, PathFilter, Render, Stream, Value, ValueObject } from '#/compiler/filter.js';
+import type { Context, Env, Filter, Lib, LibFunction, Path, PathFilter, Render, Resumed, Stream, Value, ValueObject } from '#/compiler/filter.js';
 import { add, delpaths, field, getpath, halt, has, iterate, keys, length, recursePaths, setpath, split } from './intrinsics.js';
 import { JqError, compare, describe, fromjson, isNumber, isObject, newObject, tojson, tonumber, tostring, truthy, typeOf } from './value.js';
-import { constant, overload, runtimePathFunction, streams, values } from '#/compiler/filter.js';
+import { Await, constant, each, feed, firstOf, forward, isTask, overload, runtimePathFunction, streams, task, values } from '#/compiler/filter.js';
 
 export function assertString(value: Value, what: string): string {
 	if (typeof value !== 'string') {
@@ -267,6 +267,32 @@ function *head<Type>(outputs: Iterable<Type>): Generator<Type> {
 	const next = outputs[Symbol.iterator]().next();
 	if (next.done !== true) {
 		yield next.value;
+	}
+}
+
+/** As {@link limited}, over a stream that may await: its `Await`s forwarded, not counted. */
+function *limitedTask<Type>(count: Value, outputs: Iterable<Type>): Generator<Type, void, Resumed> {
+	let remaining = limitCount(count);
+	if (remaining <= 0) {
+		return;
+	}
+	const iterator = outputs[Symbol.iterator]() as Iterator<Type, unknown, Resumed>;
+	try {
+		let next = iterator.next();
+		while (next.done !== true) {
+			const item = next.value;
+			if (item instanceof Await) {
+				next = yield* forward(item, iterator);
+			} else {
+				yield item;
+				if (--remaining <= 0) {
+					return;
+				}
+				next = iterator.next();
+			}
+		}
+	} finally {
+		iterator.return?.();
 	}
 }
 
@@ -557,12 +583,30 @@ export const lib: Lib = {
 			yield* [];
 		},
 	),
-	path: withPath(paths => function*(input, env) {
-		for (const [ path ] of paths([], input, env)) {
-			yield path;
+	path: withPath(paths => {
+		if (isTask(paths)) {
+			return task(function*(input, env) {
+				yield* each(paths([], input, env), function*(pair) {
+					yield pair[0];
+				});
+			});
 		}
+		return function*(input, env) {
+			for (const [ path ] of paths([], input, env)) {
+				yield path;
+			}
+		};
 	}),
-	del: withPath(paths => (input, env) => delpaths(input, [ ...paths([], input, env) ].map(([ path ]) => path))),
+	del: withPath(paths => {
+		if (isTask(paths)) {
+			return task(function*(input, env) {
+				const collected: Path[] = [];
+				yield* feed(paths([], input, env), pair => collected.push(pair[0]));
+				yield delpaths(input, collected);
+			});
+		}
+		return (input, env) => delpaths(input, [ ...paths([], input, env) ].map(([ path ]) => path));
+	}),
 	select: runtimePathFunction(
 		withFilter(condition => function*(input, env) {
 			for (const test of condition(input, env)) {
@@ -590,6 +634,14 @@ export const lib: Lib = {
 			}),
 			(render, arg) => {
 				const filter = render.path(arg);
+				if (isTask(filter)) {
+					return task(function*(path, value, env) {
+						const found = yield* firstOf(filter(path, value, env));
+						if (found !== undefined) {
+							yield found;
+						}
+					});
+				}
 				return function*(path, value, env) {
 					yield* head(filter(path, value, env));
 				};
@@ -609,6 +661,13 @@ export const lib: Lib = {
 		(render, count, arg) => {
 			const counts = render.generator(count);
 			const filter = render.path(arg);
+			if (isTask(filter)) {
+				return task(function*(path, value, env) {
+					for (const bound of counts(value, env)) {
+						yield* limitedTask(bound, filter(path, value, env));
+					}
+				});
+			}
 			return function*(path, value, env) {
 				for (const bound of counts(value, env)) {
 					yield* limited(bound, filter(path, value, env));
