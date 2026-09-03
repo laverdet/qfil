@@ -172,6 +172,25 @@ function *settling(body: Filter, input: Value, frames: Env): Generator<Value, vo
  * the update's last output is the next state, `none` when it has none.
  */
 function *reduce<State>(inits: Iterable<State>, items: () => Iterable<Value>, env: Env, update: (state: State, bound: Env) => Iterable<State>, none: () => State): Generator<State, void, Resumed> {
+	for (const init of inits) {
+		let state = init;
+		for (const item of items()) {
+			const bound = push(env, item);
+			let empty = true;
+			for (const output of update(state, bound)) {
+				state = output;
+				empty = false;
+			}
+			if (empty) {
+				state = none();
+			}
+		}
+		yield state;
+	}
+}
+
+/** As {@link reduce}, over streams that may await: their instructions passed along. */
+function *taskReduce<State>(inits: Iterable<State>, items: () => Iterable<Value>, env: Env, update: (state: State, bound: Env) => Iterable<State>, none: () => State): Generator<State, void, Resumed> {
 	yield* each(inits, function*(init) {
 		let state = init;
 		yield* each(items(), function*(item) {
@@ -189,6 +208,24 @@ function *reduce<State>(inits: Iterable<State>, items: () => Iterable<Value>, en
 
 /** `foreach`, as {@link reduce}: every output of the update is a state, and is yielded, through the extract when there is one. */
 function *foreach<State>(inits: Iterable<State>, items: () => Iterable<Value>, env: Env, update: (state: State, bound: Env) => Iterable<State>, extract: ((state: State, bound: Env) => Iterable<State>) | null): Generator<State, void, Resumed> {
+	for (const init of inits) {
+		let state = init;
+		for (const item of items()) {
+			const bound = push(env, item);
+			for (const output of update(state, bound)) {
+				state = output;
+				if (extract === null) {
+					yield output;
+				} else {
+					yield* extract(output, bound);
+				}
+			}
+		}
+	}
+}
+
+/** As {@link foreach}, over streams that may await: their instructions passed along. */
+function *taskForeach<State>(inits: Iterable<State>, items: () => Iterable<Value>, env: Env, update: (state: State, bound: Env) => Iterable<State>, extract: ((state: State, bound: Env) => Iterable<State>) | null): Generator<State, void, Resumed> {
 	yield* each(inits, function*(init) {
 		let state = init;
 		yield* each(items(), function*(item) {
@@ -751,10 +788,12 @@ class Compiler {
 		const inits = this.generator(node.init, scope);
 		const sources = this.generator(node.source, scope);
 		const updates = this.generator(node.update, inner);
+		const awaits = isTask(inits) || isTask(sources) || isTask(updates);
+		const fold = awaits ? taskReduce : reduce;
 		const folded: Stream = function*(input, env) {
-			yield* reduce(inits(input, env), () => sources(input, env), env, updates, () => null);
+			yield* fold(inits(input, env), () => sources(input, env), env, updates, () => null);
 		};
-		return [ inits, sources, updates ].some(isTask) ? task(folded) : folded;
+		return awaits ? task(folded) : folded;
 	}
 
 	/**
@@ -785,10 +824,12 @@ class Compiler {
 		const sources = this.generator(node.source, scope);
 		const updates = this.generator(node.update, inner);
 		const extracts = node.extract === null ? null : this.generator(node.extract, inner);
+		const awaits = isTask(inits) || isTask(sources) || isTask(updates) || (extracts !== null && isTask(extracts));
+		const fold = awaits ? taskForeach : foreach;
 		const folded: Stream = function*(input, env) {
-			yield* foreach(inits(input, env), () => sources(input, env), env, updates, extracts);
+			yield* fold(inits(input, env), () => sources(input, env), env, updates, extracts);
 		};
-		return [ inits, sources, updates, ...extracts === null ? [] : [ extracts ] ].some(isTask) ? task(folded) : folded;
+		return awaits ? task(folded) : folded;
 	}
 
 	/** `foreach` as a path expression, as {@link pathReduce}. */
