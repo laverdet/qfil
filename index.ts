@@ -10,14 +10,13 @@
 import type { Context, Lib, Runtime, Value } from './compiler/filter.js';
 import * as process from 'node:process';
 import { instantiate } from './compiler/compiler.js';
-import { drive } from './compiler/filter.js';
 import { parse } from './compiler/parser.js';
 import { lib as defaultLib } from './runtime/js/index.js';
 import { runtime as defaultRuntime } from './runtime/js/runtime.js';
 import { JqError, tojson } from './runtime/js/value.js';
 
 export type { Context, Env, Filter as LibFilter, Handled, Handler, Lib, LibFunction, Path, PathFilter, Render, Runtime, Stream, Value, ValueObject } from './compiler/filter.js';
-export { Await, Bounce, Break, CompileError, Tail, combine, combineStreams, constant, drive, each, feed, generator, isStream, isTask, over, overload, pathForm, promises, runtimePathFunction, settle, streams, task, unrolled, values } from './compiler/filter.js';
+export { Await, Bounce, Break, CompileError, Tail, combine, combineStreams, constant, driven, each, feed, generator, isStream, isTask, over, overload, pathForm, promises, runtimePathFunction, settle, streams, task, unrolled, values } from './compiler/filter.js';
 export { ParseError, parse } from './compiler/parser.js';
 export { lib } from './runtime/js/index.js';
 export { runtime } from './runtime/js/runtime.js';
@@ -43,14 +42,21 @@ export interface SingleFilter {
 	readonly stream: false;
 }
 
+/** A stream that never awaits: iterate it as any sync iterable. */
 export interface StreamFilter {
 	(input: Value): Iterable<Value>;
-	/** Whether the stream may yield `Await`s: one to run through `drive`, not a plain loop. */
-	readonly awaits: boolean;
+	readonly awaits: false;
 	readonly stream: true;
 }
 
-export type Filter = SingleFilter | StreamFilter;
+/** A filter that awaits: an async iteration, each output settled as it comes. */
+export interface TaskFilter {
+	(input: Value): AsyncIterable<Value>;
+	readonly awaits: true;
+	readonly stream: true;
+}
+
+export type Filter = SingleFilter | StreamFilter | TaskFilter;
 
 function createContext(options: RunOptions = {}): Context {
 	const inputs = (options.inputs ?? [])[Symbol.iterator]();
@@ -77,7 +83,8 @@ function createContext(options: RunOptions = {}): Context {
 
 /**
  * Compiles a filter to a function of its input. Whether the result is a generator function says
- * whether the filter is a stream; `stream` says the same.
+ * whether the filter is a stream, and `stream` says the same; a filter that awaits is an async
+ * generator function, iterated with `for await`, and `awaits` says so.
  */
 export function compile(source: string, options: RunOptions = {}): Filter {
 	const program = instantiate(source, parse(source), options.runtime ?? defaultRuntime, options.lib ?? defaultLib, createContext(options));
@@ -90,5 +97,14 @@ export function compile(source: string, options: RunOptions = {}): Filter {
 /** Runs a filter over one input, collecting every output: an array, or a promise of one when the filter awaits. */
 export function run(source: string, input: Value, options: RunOptions = {}): Value[] | Promise<Value[]> {
 	const filter = compile(source, options);
-	return drive(filter.stream ? filter(input) : [ filter(input) ]);
+	if (filter.awaits) {
+		return async function() {
+			const outputs: Value[] = [];
+			for await (const output of filter(input)) {
+				outputs.push(output);
+			}
+			return outputs;
+		}();
+	}
+	return filter.stream ? [ ...filter(input) ] : [ filter(input) ];
 }

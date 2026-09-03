@@ -13,7 +13,7 @@
  */
 import type * as ast from './ast.js';
 import type { Context, Env, Filter, Handled, Handler, Lib, LibFunction, PathFilter, Render, Resumed, Runtime, Single, Stream, Value } from './filter.js';
-import { Bounce, Break, CompileError, Tail, allSingle, each, feed, generator, isStream, isTask, lookup, over, pathCall, product, push, settle, task, unrolled } from './filter.js';
+import { Bounce, Break, CompileError, Tail, allSingle, driven, each, feed, generator, isStream, isTask, lookup, over, pathCall, product, push, settle, task, unrolled } from './filter.js';
 
 /** A definition: the filters of its body, called with its own frame and its parameters pushed on the environment it closed over. */
 interface Definition {
@@ -267,11 +267,11 @@ function patternVariables(pattern: ast.Pattern, into: string[] = []): string[] {
 	return into;
 }
 
-/** A compiled program: a function of its input, and whether it is a stream. */
+/** A compiled program: a function of its input, and its shape. */
 export interface Program {
-	readonly filter: (input: Value) => Value | Iterable<Value>;
+	readonly filter: (input: Value) => Value | Iterable<Value> | AsyncIterable<Value>;
 	readonly stream: boolean;
-	/** Whether the stream may yield `Await`s: one to run through `drive`, not a plain loop. */
+	/** Whether the program awaits: its filter is then an async iteration, each output settled as it comes. */
 	readonly awaits: boolean;
 }
 
@@ -298,9 +298,22 @@ class Compiler {
 	program(node: ast.Node): Program {
 		const filter = this.value(node, new Scope(null, 0));
 		if (isStream(filter)) {
-			return { *filter(input) {
-				yield* filter(input, null);
-			}, stream: true, awaits: isTask(filter) };
+			if (isTask(filter)) {
+				return {
+					async *filter(input) {
+						yield* driven(filter(input, null));
+					},
+					awaits: true,
+					stream: true,
+				};
+			}
+			return {
+				*filter(input) {
+					yield* filter(input, null);
+				},
+				awaits: false,
+				stream: true,
+			};
 		}
 		return { filter: input => filter(input, null), stream: false, awaits: false };
 	}

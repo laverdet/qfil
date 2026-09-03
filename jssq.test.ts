@@ -42,6 +42,9 @@ function oursOutput(filter: string, values: readonly Value[], options: RunOption
 	const shared = { [Symbol.iterator]: () => iterator };
 	try {
 		const compiled = compile(filter, { inputs: shared, debug: () => {}, ...options });
+		if (compiled.awaits) {
+			throw new Error('an awaiting filter in a differential case');
+		}
 		const outputs: Value[] = [];
 		for (const value of shared) {
 			outputs.push(...compiled.stream ? compiled(value) : [ compiled(value) ]);
@@ -649,6 +652,9 @@ void describe('compiled shape', () => {
 		const filter = compile('.[]');
 		assert.ok(filter.stream);
 		assert.equal(filter.constructor.name, 'GeneratorFunction');
+		if (filter.awaits) {
+			assert.fail('a plain stream does not await');
+		}
 		assert.deepEqual([ ...filter([ 1, 2 ]) ], [ 1, 2 ]);
 	});
 	void it('makes objects without a prototype', () => {
@@ -773,6 +779,33 @@ void describe('filters that await', () => {
 	});
 	void it('follows tail calls between awaits', async () => {
 		assert.deepEqual(await eventually('def f: later(.), (if . > 0 then . - 1 | f else empty end); [f]', 2), [ [ 2, 1, 0 ] ]);
+	});
+	void it('compiles to an async iteration', async () => {
+		const filter = compile('later(1), 2', { lib: slowly });
+		if (!filter.awaits) {
+			assert.fail('expected an awaiting filter');
+		}
+		assert.equal(filter.stream, true);
+		assert.equal((Object.getPrototypeOf(filter) as { constructor: { name: string } }).constructor.name, 'AsyncGeneratorFunction');
+		const outputs: Value[] = [];
+		for await (const output of filter(null)) {
+			outputs.push(output);
+		}
+		assert.deepEqual(outputs, [ 1, 2 ]);
+	});
+	void it('stops cleanly when the iteration does', async () => {
+		const filter = compile('later(1), later(2), later(3)', { lib: slowly });
+		if (!filter.awaits) {
+			assert.fail('expected an awaiting filter');
+		}
+		const outputs: Value[] = [];
+		for await (const output of filter(null)) {
+			outputs.push(output);
+			if (outputs.length === 2) {
+				break;
+			}
+		}
+		assert.deepEqual(outputs, [ 1, 2 ]);
 	});
 	void it('refuses a task where a plain stream was compiled', () => {
 		const refused = [

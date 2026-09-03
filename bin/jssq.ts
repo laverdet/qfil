@@ -170,7 +170,7 @@ function namedArguments(argv: readonly string[]): { args: Record<string, Value>;
 	return { args, rest };
 }
 
-export function main(argv: readonly string[]): number {
+export async function main(argv: readonly string[]): Promise<number> {
 	const { args, rest } = namedArguments(argv);
 	const { values: flags, positionals } = util.parseArgs({
 		args: rest,
@@ -247,8 +247,12 @@ export function main(argv: readonly string[]): number {
 		const line = raw && typeof sorted === 'string' ? sorted : tojson(sorted, indent);
 		process.stdout.write(`${flags['ascii-output'] === true ? escapeNonAscii(line) : line}${separator}`);
 	};
-	const run = (input: Value) => {
-		if (filter.stream) {
+	const run = async (input: Value) => {
+		if (filter.awaits) {
+			for await (const output of filter(input)) {
+				write(output);
+			}
+		} else if (filter.stream) {
 			for (const output of filter(input)) {
 				write(output);
 			}
@@ -257,10 +261,10 @@ export function main(argv: readonly string[]): number {
 		}
 	};
 	if (flags['null-input'] === true) {
-		run(null);
+		await run(null);
 	} else {
 		for (const input of { [Symbol.iterator]: () => remaining }) {
-			run(input);
+			await run(input);
 		}
 	}
 	if (flags['exit-status'] !== true) {
@@ -273,7 +277,7 @@ export function main(argv: readonly string[]): number {
 
 if (process.argv[1] !== undefined && import.meta.url === `file://${process.argv[1]}`) {
 	try {
-		process.exitCode = main(process.argv.slice(2));
+		process.exitCode = await main(process.argv.slice(2));
 	} catch (error) {
 		if (error instanceof Halt) {
 			if (error.value !== undefined) {

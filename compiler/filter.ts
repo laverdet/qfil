@@ -298,49 +298,43 @@ export function *unrolled(start: () => Iterable<Value>): Generator<Value, void, 
 }
 
 /**
- * Drives a stream of outputs, settling whatever it awaits: the values as an array when nothing
- * did, a promise of them once something has. This is the only async frame there is; between
- * settlements the program below runs synchronously.
+ * Drives a stream that awaits, from outside its frames: an async iteration of its values, each
+ * yielded as it settles. An `Await` met here is settled — the resolution resumed into the
+ * stream, a rejection thrown into it, where the program's own `try` may catch it. This is the
+ * only async frame there is; between settlements the program below runs synchronously.
  */
-export function drive(outputs: Iterable<Value>): Value[] | Promise<Value[]> {
-	const iterator = outputs[Symbol.iterator]();
-	const results: Value[] = [];
-	// Collects values until the stream awaits or ends
-	const collect = (from: IteratorResult<Value>): IteratorResult<Value> => {
-		let next = from;
-		while (next.done !== true && !(next.value instanceof Await)) {
-			results.push(next.value);
-			next = iterator.next();
-		}
-		return next;
-	};
-	const paused = collect(iterator.next());
-	if (paused.done === true) {
-		return results;
-	}
-	return async function() {
-		let next: IteratorResult<Value> = paused;
+export async function *driven(outputs: Iterable<Value>): AsyncGenerator<Value, void, undefined> {
+	const iterator = outputs[Symbol.iterator]() as Iterator<Value, unknown, Resumed>;
+	try {
+		let next = iterator.next();
 		while (next.done !== true) {
-			const waiting = next.value as unknown as Await;
-			// Resume with the value, or throw the rejection into the program; an error the program
-			// then raises must propagate out, not be thrown back in, so the step runs after the catch
-			const step = await async function(): Promise<() => IteratorResult<Value>> {
-				try {
-					const value = await waiting.promise;
-					return () => iterator.next(value);
-				} catch (error) {
-					return () => {
-						if (iterator.throw === undefined) {
-							throw error;
-						}
-						return iterator.throw(error);
-					};
-				}
-			}();
-			next = collect(step());
+			const item = next.value;
+			if (item instanceof Await) {
+				// Resume with the value, or throw the rejection into the program; an error the
+				// program then raises must propagate out, not be thrown back in, so the step runs
+				// after the catch
+				const step = await async function(): Promise<() => IteratorResult<Value, unknown>> {
+					try {
+						const value = await item.promise;
+						return () => iterator.next(value);
+					} catch (error) {
+						return () => {
+							if (iterator.throw === undefined) {
+								throw error;
+							}
+							return iterator.throw(error);
+						};
+					}
+				}();
+				next = step();
+			} else {
+				yield item;
+				next = iterator.next();
+			}
 		}
-		return results;
-	}();
+	} finally {
+		iterator.return?.();
+	}
 }
 
 /** A library function's path form, when it has one: `select`, `first`, `getpath`. */

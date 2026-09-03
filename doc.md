@@ -144,12 +144,13 @@ number (`isNumber`, `typeOf`, `equal`), a JavaScript-native courtesy; it never m
 
 An extension — jq has nothing to await. A library function may settle a promise per call:
 `promises(render, args, body)` is `values` with an async body. The filter it returns is a task: a
-plain sync generator that yields an `Await` holding the promise among its values. `drive` at the
-very top is the only async frame there is — it collects values, settles what the stream awaits,
-and resumes the generator with the result, throwing a rejection back in (as a `JqError` when the
-body meant it to be caught) where the program's own `try` can catch it. `run` returns an array
-when nothing awaited and a promise of one once something has; a compiled filter says `awaits` when
-it must go through `drive` rather than a plain loop.
+plain sync generator that yields an `Await` holding the promise among its values. `driven` at the
+very top is the only async frame there is — an async generator over the task's values that
+settles what the stream awaits and resumes the generator with the result, throwing a rejection
+back in (as a `JqError` when the body meant it to be caught) where the program's own `try` can
+catch it. A filter that awaits therefore compiles to an async generator function — `awaits` is
+true, and `for await` iterates its outputs as they settle — while everything else keeps its sync
+shape; `run` still returns an array when nothing awaited and a promise of one once something has.
 
 Whether a filter is a task is read off the function at instantiation, as `isStream` is: a
 construct over a task builds an `Await`-forwarding loop (`each`), everything else keeps its plain
@@ -195,7 +196,7 @@ only calls into a recursion pay for any of this; everything else compiles as bef
   dispatch of everything else to the runtime.
 - `compiler/filter.ts` — the contract: `Value`, `Filter`, `Env`, `Render`, `Context`, `Runtime`,
   `LibFunction`, the combinators (`values`, `combine`, `promises`) a runtime or library is written
-  with, the task machinery (`Await`, `each`, `drive`), and the tail-call machinery (`Bounce`,
+  with, the task machinery (`Await`, `each`, `driven`), and the tail-call machinery (`Bounce`,
   `Tail`, `settle`, `unrolled`).
   Nothing under `compiler/` depends on a particular runtime.
 - `runtime/js/runtime.ts` — the default runtime: a handler per kind of node, jq's semantics in
