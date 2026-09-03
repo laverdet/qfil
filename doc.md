@@ -167,6 +167,17 @@ so a library function that runs a stream itself — `limit`, `first`, `map`, `so
 an awaiting argument at compile time rather than mistaking an `Await` for a value at runtime;
 `render.filter` is the opt-in the task-aware constructs use.
 
+Awaits run abreast. Where a stream's values each feed a body that awaits — a pipe, `as`, the
+sides of a comma, the branches of an `if` over its condition's values — the pump begins the next
+value's body as soon as the ones before it park on an `Await`, and one wait settles every parked
+promise together. Outputs still come in the source's order: a body ahead of its turn holds what it
+yields, and even what it throws, until its turn, so `[.[] | fetch(.)]` starts its fetches
+together and still collects them in order. The argument streams of an operator or a function call
+are likewise each read once, all abreast, rather than re-run per combination. At most sixteen
+bodies run beyond the one whose turn it is, so a consumer that stops early leaves an endless
+source unread. What a body ahead of its turn does, it does ahead of where a serial run would have
+it — the promises it starts, the inputs it reads — which is the point.
+
 ### The filesystem runtime
 
 A proof that a runtime really is just a meaning for the syntax: `runtime/fs` queries the

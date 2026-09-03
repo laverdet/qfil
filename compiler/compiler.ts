@@ -13,7 +13,7 @@
  */
 import type * as ast from './ast.js';
 import type { Context, Env, Filter, Handled, Handler, Lib, LibFunction, PathFilter, Render, Resumed, Runtime, Single, Stream, Value } from './filter.js';
-import { Bounce, Break, CompileError, Tail, allSingle, driven, each, feed, generator, isStream, isTask, lookup, over, pathCall, product, push, settle, task, unrolled } from './filter.js';
+import { Bounce, Break, CompileError, Tail, abreast, allSingle, driven, each, feed, generator, isStream, isTask, lookup, over, pathCall, product, push, settle, task, unrolled } from './filter.js';
 
 /** A definition: the filters of its body, called with its own frame and its parameters pushed on the environment it closed over. */
 interface Definition {
@@ -875,10 +875,11 @@ class Compiler {
 			return (input, env) => body(input, push(env, source(input, env)));
 		}
 		const bodies = generator(body);
-		const bound = over(generator(source), function*(value, input, env) {
+		const bound = function*(value: Value, input: Value, env: Env): Generator<Value, void, Resumed> {
 			yield* bodies(input, push(env, value));
-		});
-		return isTask(body) ? task(bound) : bound;
+		};
+		const sources = generator(source);
+		return isTask(body) ? abreast(sources, bound) : over(sources, bound);
 	}
 
 	private pathBind(node: ast.Bind, scope: Scope): PathFilter {

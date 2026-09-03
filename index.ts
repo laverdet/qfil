@@ -16,7 +16,7 @@ import { runtime as defaultRuntime } from './runtime/js/runtime.js';
 import { JqError, tojson } from './runtime/js/value.js';
 
 export type { Context, Env, Filter as LibFilter, Handled, Handler, Lib, LibFunction, Path, PathFilter, Render, Runtime, Stream, Value, ValueObject } from './compiler/filter.js';
-export { Await, Bounce, Break, CompileError, Tail, combine, combineStreams, constant, driven, each, feed, generator, isStream, isTask, over, overload, pathForm, promises, runtimePathFunction, settle, streams, task, unrolled, values } from './compiler/filter.js';
+export { Await, Bounce, Break, CompileError, Tail, abreast, combine, combineStreams, constant, driven, each, feed, generator, isStream, isTask, over, overload, pathForm, promises, runtimePathFunction, settle, streams, task, unrolled, values } from './compiler/filter.js';
 export { ParseError, parse } from './compiler/parser.js';
 export { lib } from './runtime/js/index.js';
 export { runtime } from './runtime/js/runtime.js';

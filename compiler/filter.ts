@@ -248,6 +248,204 @@ export function over<Args extends readonly unknown[], Item, Out>(source: (...arg
 	}
 }
 
+/** How many bodies `abreast` begins beyond the one whose turn it is: reading the source further would start no more work. */
+const breadth = 16;
+
+/** A parked `Await`'s settlement, recorded as it lands — never thrown out of band — for whoever resumes the lane. */
+class Parking {
+	settlement: { readonly resume: Resumed } | { readonly reject: unknown } | null = null;
+	readonly wait: Promise<null>;
+
+	constructor(waiting: Await) {
+		this.wait = waiting.promise.then(
+			value => {
+				this.settlement = { resume: value };
+				return null;
+			},
+			(error: unknown) => {
+				this.settlement = { reject: error };
+				return null;
+			},
+		);
+	}
+}
+
+/**
+ * One body of an `abreast` pump: its generator, the values it has yielded ahead of its turn, and
+ * how it stands — parked on an `Await`, holding a value, ended, or failed. What it throws is held
+ * with the same care as what it yields, so an early failure cannot jump the order.
+ */
+class Lane<Out> {
+	readonly buffer: Out[] = [];
+	parking: Parking | null = null;
+	done = false;
+	thrown: { readonly error: unknown } | null = null;
+	private readonly outputs: Generator<Out, void, Resumed>;
+
+	constructor(outputs: Generator<Out, void, Resumed>) {
+		this.outputs = outputs;
+	}
+
+	/** Parked on a promise that has not settled: the one state `step` cannot move past. */
+	get waiting(): boolean {
+		return this.parking !== null && this.parking.settlement === null;
+	}
+
+	/** One step of the body, to its next yield: a parked settlement is resumed — or thrown — into it. */
+	step(): void {
+		const next = (() => {
+			try {
+				if (this.parking === null) {
+					return this.outputs.next();
+				}
+				const settlement = this.parking.settlement ?? function(): never {
+					throw new Error('A lane stepped while parked');
+				}();
+				this.parking = null;
+				if ('resume' in settlement) {
+					return this.outputs.next(settlement.resume);
+				} else {
+					return this.outputs.throw(settlement.reject);
+				}
+			} catch (error) {
+				this.thrown = { error };
+				return null;
+			}
+		})();
+		if (next === null) {
+			// The catch above holds what came of it
+		} else if (next.done === true) {
+			this.done = true;
+		} else if (next.value instanceof Await) {
+			this.parking = new Parking(next.value);
+		} else {
+			this.buffer.push(next.value);
+		}
+	}
+
+	close(): void {
+		this.outputs.return();
+	}
+}
+
+/**
+ * As `over`, for a body that awaits: the bodies of the source's items run abreast — each begun as
+ * soon as the ones before it park on an `Await`, every parked promise settled in one wait — while
+ * their outputs still come in the source's order. A body ahead of its turn runs until it has a
+ * value to its name, and at most `breadth` are begun beyond the one whose turn it is, so a
+ * consumer that stops early leaves an endless source unread. What such a body does, it does ahead
+ * of where a serial run would have it: its promises are already in flight, and that is the point.
+ */
+export function abreast<Args extends readonly unknown[], Item, Out>(source: (...args: Args) => Iterable<Item>, body: (item: Item, ...args: Args) => Generator<Out, void, Resumed>): (...args: Args) => Generator<Out, void, Resumed> {
+	return task(function*(...args: Args): Generator<Out, void, Resumed> {
+		const iterator = source(...args)[Symbol.iterator]() as Iterator<Item, unknown, Resumed>;
+		const lanes: Lane<Out>[] = [];
+		let parking = null as Parking | null;
+		let state = 'open' as 'open' | 'done' | { readonly error: unknown };
+		// One item off the source, its own `Await`s parked as a lane's are; null while it is parked, and
+		// once it is done or has failed — a failure held until every lane before it has run out
+		const pull = (): IteratorYieldResult<Item> | null => {
+			if (state !== 'open') {
+				return null;
+			}
+			try {
+				const next = (() => {
+					if (parking === null) {
+						return iterator.next();
+					}
+					const { settlement } = parking;
+					if (settlement === null) {
+						return null;
+					}
+					parking = null;
+					if ('resume' in settlement) {
+						return iterator.next(settlement.resume);
+					} else if (iterator.throw === undefined) {
+						throw settlement.reject;
+					} else {
+						return iterator.throw(settlement.reject);
+					}
+				})();
+				if (next === null) {
+					return null;
+				} else if (next.done === true) {
+					state = 'done';
+					return null;
+				} else if (next.value instanceof Await) {
+					parking = new Parking(next.value);
+					return null;
+				} else {
+					return next;
+				}
+			} catch (error) {
+				state = { error };
+				return null;
+			}
+		};
+		// A lane behind the front runs until it has a value to its name, parks, or ends
+		const catchUp = (lane: Lane<Out>) => {
+			while (lane.buffer.length === 0 && lane.thrown === null && !lane.done && !lane.waiting) {
+				lane.step();
+			}
+		};
+		try {
+			while (true) {
+				// The front lane's outputs, as far as it will run
+				while (lanes.length > 0 && !lanes[0]!.waiting) {
+					const front = lanes[0]!;
+					if (front.buffer.length > 0) {
+						yield front.buffer.shift()!;
+					} else if (front.thrown !== null) {
+						throw front.thrown.error;
+					} else if (front.done) {
+						lanes.shift();
+					} else {
+						front.step();
+					}
+				}
+				// The lanes behind it catch up to their next value or promise
+				for (let ii = 1; ii < lanes.length; ++ii) {
+					catchUp(lanes[ii]!);
+				}
+				// More lanes, while the front is parked and the source has items to give
+				while (lanes.length < breadth && (lanes.length === 0 || lanes[0]!.waiting)) {
+					const next = pull();
+					if (next === null) {
+						break;
+					}
+					const lane = new Lane(body(next.value, ...args));
+					lanes.push(lane);
+					catchUp(lane);
+				}
+				if (lanes.length === 0) {
+					if (state === 'done') {
+						return;
+					} else if (typeof state === 'object') {
+						throw state.error;
+					}
+				} else if (!lanes[0]!.waiting) {
+					continue;
+				}
+				// Everything is parked: one wait over every pending promise, each settlement recorded
+				// where its lane will read it, so a rejection is thrown into its own lane and no other
+				const waits = lanes.filter(lane => lane.waiting).map(lane => lane.parking!.wait);
+				if (parking !== null && parking.settlement === null) {
+					waits.push(parking.wait);
+				}
+				if (waits.length === 0) {
+					throw new Error('Nothing was awaited');
+				}
+				yield new Await(Promise.race(waits)) as unknown as Out;
+			}
+		} finally {
+			for (const lane of lanes) {
+				lane.close();
+			}
+			iterator.return?.();
+		}
+	});
+}
+
 /**
  * What a tail call to a recursive definition returns in place of a value: the next call, for
  * whoever settles it — the recursion runs where `settle` loops, not on the JavaScript stack. Like
@@ -437,19 +635,32 @@ export function *product(streams: readonly Stream[], input: Value, env: Env, slo
 		order.reverse();
 	}
 	const values: Value[] = new Array<Value>(streams.length);
-	const go = streams.some(isTask)
-		? function*(depth: number): Generator<Value[], void, Resumed> {
+	if (streams.some(isTask)) {
+		// Every stream is read once, all of them abreast — their awaits settled together — and the
+		// combinations then come off the buffered outputs
+		const buffers = streams.map(() => [] as Value[]);
+		yield* abreast(
+			function*(): Generator<number, void, Resumed> {
+				yield* streams.keys();
+			},
+			function*(ii: number): Generator<never, void, Resumed> {
+				yield* feed(streams[ii]!(input, env), value => buffers[ii]!.push(value));
+			},
+		)();
+		const go = function*(depth: number): Generator<Value[], void, Resumed> {
 			if (depth === order.length) {
 				yield [ ...values ];
 				return;
 			}
 			const ii = order[depth]!;
-			yield* each(streams[ii]!(input, env), function*(value) {
+			for (const value of buffers[ii]!) {
 				values[ii] = value;
 				yield* go(depth + 1);
-			});
-		}
-		: function*(depth: number): Generator<Value[], void, Resumed> {
+			}
+		};
+		yield* go(0);
+	} else {
+		const go = function*(depth: number): Generator<Value[], void, Resumed> {
 			if (depth === order.length) {
 				yield [ ...values ];
 				return;
@@ -460,7 +671,8 @@ export function *product(streams: readonly Stream[], input: Value, env: Env, slo
 				yield* go(depth + 1);
 			}
 		};
-	yield* go(0);
+		yield* go(0);
+	}
 }
 
 /** `body` over one value from each filter, for every combination; a single value when every filter is. */

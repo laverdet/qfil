@@ -6,10 +6,10 @@
  * meaning for the same syntax.
  */
 import type * as ast from '#/compiler/ast.js';
-import type { Filter, Handler, Path, PathFilter, Render, Runtime, Stream, Value } from '#/compiler/filter.js';
+import type { Env, Filter, Handler, Path, PathFilter, Render, Resumed, Runtime, Stream, Value } from '#/compiler/filter.js';
 import * as intrinsics from './intrinsics.js';
 import { JqError, compare, equal, newObject, tostring, truthy } from './value.js';
-import { CompileError, combine, combineStreams, each, feed, firstOf, generator, isStream, isTask, over, task } from '#/compiler/filter.js';
+import { CompileError, abreast, combine, combineStreams, each, feed, firstOf, generator, isStream, isTask, over, task } from '#/compiler/filter.js';
 
 export type Operators = Readonly<Record<ast.BinaryOperator, (left: Value, right: Value) => Value>>;
 
@@ -259,10 +259,10 @@ export const runtime: Runtime = {
 			const right = isStream(left) ? render.filter(node.right) : render.last(node.right);
 			if (isStream(left)) {
 				const rights = generator(right);
-				const piped = over(left, function*(value, _input, env) {
+				const piped = function*(value: Value, _input: Value, env: Env): Generator<Value, void, Resumed> {
 					yield* rights(value, env);
-				});
-				return isTask(right) ? task(piped) : piped;
+				};
+				return isTask(right) ? abreast(left, piped) : over(left, piped);
 			} else if (isStream(right)) {
 				const piped: Stream = function*(input, env) {
 					yield* right(left(input, env), env);
@@ -275,10 +275,10 @@ export const runtime: Runtime = {
 		path: (node, render) => {
 			const left = render.path(node.left);
 			const right = render.path(node.right);
-			const piped = over(left, function*(pair, _path, _value, env) {
+			const piped = function*(pair: [ Path, Value ], _path: Path, _value: Value, env: Env): Generator<[ Path, Value ], void, Resumed> {
 				yield* right(pair[0], pair[1], env);
-			});
-			return isTask(right) ? task(piped) : piped;
+			};
+			return isTask(right) ? abreast(left, piped) : over(left, piped);
 		},
 	},
 	comma: {
@@ -286,20 +286,37 @@ export const runtime: Runtime = {
 			const left = generator(render.filter(node.left));
 			// The left is exhausted before the right begins: the right's outputs are the comma's last
 			const right = generator(render.last(node.right));
-			const both: Stream = function*(input, env) {
-				yield* left(input, env);
-				yield* right(input, env);
-			};
-			return isTask(left) || isTask(right) ? task(both) : both;
+			if (isTask(left) || isTask(right)) {
+				// The sides run abreast; the left's outputs still come first
+				return abreast(function*(_input: Value, _env: Env): Generator<Stream, void, Resumed> {
+					yield left;
+					yield right;
+				}, function*(side: Stream, input: Value, env: Env): Generator<Value, void, Resumed> {
+					yield* side(input, env);
+				});
+			} else {
+				return function*(input, env) {
+					yield* left(input, env);
+					yield* right(input, env);
+				};
+			}
 		},
 		path: (node, render) => {
 			const left = render.path(node.left);
 			const right = render.path(node.right);
-			const both: PathFilter = function*(path, value, env) {
-				yield* left(path, value, env);
-				yield* right(path, value, env);
-			};
-			return isTask(left) || isTask(right) ? task(both) : both;
+			if (isTask(left) || isTask(right)) {
+				return abreast(function*(_path: Path, _value: Value, _env: Env): Generator<PathFilter, void, Resumed> {
+					yield left;
+					yield right;
+				}, function*(side: PathFilter, path: Path, value: Value, env: Env): Generator<[ Path, Value ], void, Resumed> {
+					yield* side(path, value, env);
+				});
+			} else {
+				return function*(path, value, env) {
+					yield* left(path, value, env);
+					yield* right(path, value, env);
+				};
+			}
 		},
 	},
 	binary: binary(binaries),
@@ -427,13 +444,13 @@ export const runtime: Runtime = {
 					}
 				}();
 				if (isTask(paths) || isTask(right)) {
-					return task(over(generator(right), function*(value, input, env) {
+					return abreast(generator(right), function*(value, input, env) {
 						const editor = new intrinsics.Editor(input);
 						yield* feed(paths([], input, env), pair => {
 							editor.set(pair[0], combineWith(editor.get(pair[0]), value));
 						});
 						yield editor.result();
-					}));
+					});
 				} else {
 					return combine([ right ], ([ value ], input, env) => {
 						const editor = new intrinsics.Editor(input);
@@ -458,10 +475,11 @@ export const runtime: Runtime = {
 			} else {
 				const thens = generator(then);
 				const otherwises = generator(otherwise);
-				const branched = over(generator(condition), function*(test, input, env) {
+				const branch = function*(test: Value, input: Value, env: Env): Generator<Value, void, Resumed> {
 					yield* truthy(test) ? thens(input, env) : otherwises(input, env);
-				});
-				return isTask(thens) || isTask(otherwises) ? task(branched) : branched;
+				};
+				const conditions = generator(condition);
+				return isTask(thens) || isTask(otherwises) ? abreast(conditions, branch) : over(conditions, branch);
 			}
 		},
 		path: (node, render) => {
@@ -531,13 +549,14 @@ function logical(node: ast.Logical, render: Render, short: boolean): Filter {
 		const rights = over(generator(right), function*(other) {
 			yield truthy(other);
 		});
-		const boths = over(generator(left), function*(value, input, env) {
+		const both = function*(value: Value, input: Value, env: Env): Generator<Value, void, Resumed> {
 			if (truthy(value) === short) {
 				yield short;
 			} else {
 				yield* rights(input, env);
 			}
-		});
-		return isTask(rights) ? task(boths) : boths;
+		};
+		const lefts = generator(left);
+		return isTask(rights) ? abreast(lefts, both) : over(lefts, both);
 	}
 }

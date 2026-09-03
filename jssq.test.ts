@@ -862,6 +862,89 @@ void describe('filters that await', () => {
 	void it('bounces tail calls with an awaiting parameter', async () => {
 		assert.deepEqual(await eventually('def f(g): if . <= 0 then g else . - 1 | f(g) end; 100000 | f(later("deep"))'), [ 'deep' ]);
 	});
+	void it('runs a stream of awaits abreast', async () => {
+		// `note` logs when its promise starts and when it settles: every start of a batch comes
+		// before any of its ends, where a serial run would interleave them
+		const log: string[] = [];
+		const noting: Lib = {
+			...lib,
+			note: (render, arg) => promises(render, [ arg ], async (_input, value) => {
+				log.push(`+${tojson(value)}`);
+				await new Promise<void>(resolve => {
+					setImmediate(resolve);
+				});
+				log.push(`-${tojson(value)}`);
+				return value;
+			}),
+		};
+		const cases: readonly (readonly [ string, Value, Value[], string ])[] = [
+			[ '[.[] | note(.)]', [ 1, 2, 3 ], [ [ 1, 2, 3 ] ], '+1 +2 +3 -1 -2 -3' ],
+			[ '[note(1), note(2)]', null, [ [ 1, 2 ] ], '+1 +2 -1 -2' ],
+			[ 'note(1) + note(2)', null, [ 3 ], '+1 +2 -1 -2' ],
+			[ '.[] as $x | note($x)', [ 1, 2 ], [ 1, 2 ], '+1 +2 -1 -2' ],
+			[ 'if .[] then note("t") else note("f") end', [ true, false ], [ 't', 'f' ], '+"t" +"f" -"t" -"f"' ],
+			[ '[path(.[note(0)], .[note(1)])]', null, [ [ [ 0 ], [ 1 ] ] ], '+0 +1 -0 -1' ],
+			[ '[.[] | note(.) | note(. * 10)]', [ 1, 2 ], [ [ 10, 20 ] ], '+1 +2 -1 +10 -2 +20 -10 -20' ],
+		];
+		for (const [ filter, input, expected, batched ] of cases) {
+			log.length = 0;
+			assert.deepEqual(JSON.parse(tojson(await run(filter, input, { lib: noting }))), expected, filter);
+			assert.equal(log.join(' '), batched, filter);
+		}
+	});
+	void it('keeps the source order when a later item settles first', async () => {
+		const gates = new Map<string, () => void>();
+		const gated: Lib = {
+			...lib,
+			gate: (render, arg) => promises(render, [ arg ], async (_input, value) => {
+				await new Promise<void>(resolve => {
+					gates.set(value as string, resolve);
+				});
+				return value;
+			}),
+		};
+		const outputs = run('.[] | gate(.)', [ 'a', 'b' ], { lib: gated });
+		assert.ok(outputs instanceof Promise);
+		// Both gates are reached before either opens — that is the parallelism — and opening the
+		// second first must not reorder the outputs
+		for (let ii = 0; gates.size < 2; ++ii) {
+			assert.ok(ii < 100, 'the second gate was never reached');
+			await new Promise<void>(resolve => {
+				setImmediate(resolve);
+			});
+		}
+		gates.get('b')!();
+		gates.get('a')!();
+		assert.deepEqual(await outputs, [ 'a', 'b' ]);
+	});
+	void it('holds an early failure to its turn', async () => {
+		// The second body fails at once; the first's output still comes ahead of the error
+		const filter = compile('.[] | if . == 2 then broken else later(.) end', { lib: slowly });
+		if (!filter.awaits) {
+			assert.fail('expected an awaiting filter');
+		}
+		const outputs: Value[] = [];
+		await assert.rejects(async () => {
+			for await (const output of filter([ 1, 2, 3 ])) {
+				outputs.push(output);
+			}
+		}, JqError);
+		assert.deepEqual(outputs, [ 1 ]);
+	});
+	void it('stands down over an endless source', async () => {
+		const filter = compile('def nats: ., (. + 1 | nats); 0 | nats | later(.)', { lib: slowly });
+		if (!filter.awaits) {
+			assert.fail('expected an awaiting filter');
+		}
+		const outputs: Value[] = [];
+		for await (const output of filter(null)) {
+			outputs.push(output);
+			if (outputs.length === 3) {
+				break;
+			}
+		}
+		assert.deepEqual(outputs, [ 0, 1, 2 ]);
+	});
 });
 
 /** Tail calls: a recursive call in tail position runs on one frame, not the JavaScript stack. */
