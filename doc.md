@@ -1,19 +1,26 @@
-# jssq
+# qfil
 
 A jq-compatible query language, run as JavaScript. A filter is parsed once and assembled into a
 JavaScript function of its input from the functions a runtime gives each piece of its syntax.
 
 ```ts
-import { compile, run } from 'jssq';
+import { compile, run } from 'qfil';
+import { lib } from 'qfil/runtime/js/index.js';
+import { runtime } from 'qfil/runtime/js/runtime.js';
 
-const filter = compile('.items[] | select(.price > 10) | .name');
+const filter = compile('.items[] | select(.price > 10) | .name', { runtime, lib });
 [ ...filter({ items: [ { name: 'a', price: 5 }, { name: 'b', price: 20 } ] }) ]; // [ 'b' ]
 
-run('[.[] | . * 2]', [ 1, 2, 3 ]); // [ [ 2, 4, 6 ] ]
+run('[.[] | . * 2]', [ 1, 2, 3 ], { runtime, lib }); // [ [ 2, 4, 6 ] ]
 ```
 
-At a shell, `jssq` takes jq's common flags: `jssq -c '.[] | .name' data.json`, `-n`, `-r`, `-s`, `-R`,
-`-S`, `--arg`, `--argjson`, `--tab`, `--indent` and `-e`.
+The runtime and library are explicit: `compile` bundles nothing by default, so an application
+that uses one runtime carries only that one.
+
+At a shell, `jsjq` takes jq's common flags: `jsjq -c '.[] | .name' data.json`, `-n`, `-r`, `-s`, `-R`,
+`-S`, `--arg`, `--argjson`, `--tab`, `--indent` and `-e`. Its default runtime is the jq one —
+spelled numbers, jq's total order — and `--runtime js` selects JavaScript's doubles and order.
+`fq` is the filesystem runtime as a binary of its own.
 
 ## Compatibility
 
@@ -33,7 +40,7 @@ implementation deliberately differs:
   `100000000000000000000`). The jq runtime (`runtime/jq`) keeps a literal's spelling as jq 1.7
   does — `1.000`, `1E+2`, `11.0` for `1.10e1` — through variables, containers, `tostring`,
   `tonumber`, `fromjson`, `sort` and negation, until arithmetic touches it.
-- Order, in the default runtime, is JavaScript's: strings compare by code unit, containers are
+- Order, in the JavaScript runtime, is JavaScript's: strings compare by code unit, containers are
   NaN, and anything else subtracts, so `[] < {}` is false, objects do not sort, and
   `sort_by`/`group_by` compare their keys element by element. The jq runtime has jq's total order:
   null < false < true < numbers < strings < arrays < objects.
@@ -185,12 +192,12 @@ filesystem. An entry — a file, a directory — is a plain value of its stat (`
 `type`, `size`, `mtime`) with a brand the types cannot spell, so indexing, `select`, `sort_by`
 and printing need nothing new; only traversal is overridden — `.[]` of a directory is its
 entries, in name order, and `..` is the entry and everything beneath it, links not followed. A
-failure down there is a `JqError`, so the program's own `try` applies. `--runtime fs` takes each
+failure down there is a `JqError`, so the program's own `try` applies. The `fq` binary takes each
 file argument as a root path (`.` when none):
 
-    jssq --runtime fs '[.[] | select(.type == "file") | .size] | add'
-    jssq --runtime fs '[.. | select(.name | test("\\.ts$")) | .path]' src
-    jssq --runtime fs '[.. | select(.type == "file")] | sort_by(.mtime) | last | .path'
+    fq '[.[] | select(.type == "file") | .size] | add'
+    fq '[.. | select(.name | test("\\.ts$")) | .path]' src
+    fq '[.. | select(.type == "file")] | sort_by(.mtime) | last | .path'
 
 ### Tail calls
 
@@ -217,9 +224,9 @@ only calls into a recursion pay for any of this; everything else compiles as bef
   with, the task machinery (`Await`, `each`, `driven`), and the tail-call machinery (`Bounce`,
   `Tail`, `settle`, `unrolled`).
   Nothing under `compiler/` depends on a particular runtime.
-- `runtime/js/runtime.ts` — the default runtime: a handler per kind of node, jq's semantics in
+- `runtime/js/runtime.ts` — the JavaScript runtime: a handler per kind of node, jq's semantics in
   JavaScript, and `invalidPath`, what a value is where a path expression was needed.
-- `runtime/js/index.ts` — the default library, keyed by name.
+- `runtime/js/index.ts` — the JavaScript library, keyed by name.
 - `runtime/js/intrinsics.ts` — the operations on values: indexing, arithmetic, paths, the
   `Editor`, formats.
 - `runtime/js/value.ts` — comparison, equality and JSON conversion over the contract's values.
@@ -227,5 +234,7 @@ only calls into a recursion pay for any of this; everything else compiles as bef
   jq's total order, and the runtime and library laid over the JavaScript ones.
 - `runtime/fs/` — the filesystem as values: branded stat objects, and traversal (`.[]`, `..`)
   laid over the JavaScript runtime.
-- `index.ts` — `compile`, `run`, `parse`; `bin/jssq.ts` — the `jssq` binary.
-- `jssq.test.ts` — the differential suite against the `jq` binary.
+- `index.ts` — `compile`, `run`, `parse`; `bin/jsjq.ts` and `bin/fq.ts` — the binaries, over
+  `bin/cli.ts`, what they share of the command line.
+- `test/` — the differential suite against the `jq` binary: `harness.ts`, and the `lang`, `jq`,
+  `js` and `fq` suites.

@@ -140,7 +140,7 @@ export class Await {
 /** What resumes a task's yield: an `Await`'s settlement, and nothing after a plain value. */
 export type Resumed = Value | undefined;
 
-const taskShape: unique symbol = Symbol('jssq.task');
+const taskShape: unique symbol = Symbol('qfil.task');
 
 /** Marks a stream — of values, of paths — as a task: one that may yield an `Await` among its items. */
 export function task<Fn extends (...args: never) => Iterable<unknown>>(fn: Fn): Fn {
@@ -559,7 +559,7 @@ export async function *driven(outputs: Iterable<Value>): AsyncGenerator<Value, v
 }
 
 /** A library function's path form, when it has one: `select`, `first`, `getpath`. */
-export const pathForm: unique symbol = Symbol('jssq.path');
+export const pathForm: unique symbol = Symbol('qfil.path');
 
 /**
  * A library function, keyed by name: given a `Render` and the syntax of its arguments, and called

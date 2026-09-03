@@ -1,5 +1,5 @@
 {
-  "name": "jssq",
+  "name": "qfil",
   "version": "0.0.0",
   "type": "module",
   "packageManager": "pnpm@11.20.0",
@@ -14,7 +14,7 @@
   "scripts": {
     "build": "tsc",
     "lint": "eslint --max-warnings 0 .",
-    "test": "tsc && node --test dist/*.test.js",
+    "test": "tsc && node --test dist/test/*.test.js",
     "watch": "tsc -w"
   },
   "dependencies": {
@@ -31,6 +31,7 @@
     "typescript": "^6.0.3"
   },
   "bin": {
-    "jssq": "./dist/bin/jssq.js"
+    "jsjq": "./dist/bin/jsjq.js",
+    "fq": "./dist/bin/fq.js"
   }
 }

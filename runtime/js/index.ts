@@ -354,7 +354,7 @@ function regexOf(compile: RegexCompiler, render: Render, pattern: ast.Node, flag
 	}
 }
 
-const skipsEmpty: unique symbol = Symbol('jssq.skipsEmpty');
+const skipsEmpty: unique symbol = Symbol('qfil.skipsEmpty');
 
 /** Marks a regex whose empty matches do not count, as jq's `n` flag has it. */
 export function ignoringEmpty(regex: RegExp): RegExp {

@@ -1,32 +1,29 @@
 /**
- * jssq — a jq-compatible query language, run as JavaScript.
+ * qfil — a jq-compatible query language, run as JavaScript.
  *
  * `compile` turns a filter into a JavaScript function of one input. The function is a plain
  * function when the filter yields exactly one value and a generator function when it may yield
  * any number: `compile('.a')` returns the field, `compile('.[]')` returns an iterator over the
  * elements. The filter is not turned into source text; it is assembled from the functions the
- * runtime and the library return for each piece of its syntax.
+ * runtime and the library return for each piece of its syntax. The runtime and library are given
+ * explicitly — nothing is bundled by default, so a consumer carries only what it imports.
  */
 import type { Context, Lib, Runtime, Value } from './compiler/filter.js';
 import * as process from 'node:process';
 import { instantiate } from './compiler/compiler.js';
 import { parse } from './compiler/parser.js';
-import { lib as defaultLib } from './runtime/js/index.js';
-import { runtime as defaultRuntime } from './runtime/js/runtime.js';
 import { JqError, tojson } from './runtime/js/value.js';
 
 export type { Context, Env, Filter as LibFilter, Handled, Handler, Lib, LibFunction, Path, PathFilter, Render, Runtime, Stream, Value, ValueObject } from './compiler/filter.js';
 export { Await, Bounce, Break, CompileError, Tail, abreast, combine, combineStreams, constant, driven, each, feed, generator, isStream, isTask, over, overload, pathForm, promises, runtimePathFunction, settle, streams, task, unrolled, values } from './compiler/filter.js';
 export { ParseError, parse } from './compiler/parser.js';
-export { lib } from './runtime/js/index.js';
-export { runtime } from './runtime/js/runtime.js';
 export { Halt, JqError } from './runtime/js/value.js';
 
 export interface RunOptions {
-	/** The library of named functions; the default one unless given. */
-	readonly lib?: Lib;
-	/** The meaning of the language's constructs; jq's unless given. */
-	readonly runtime?: Runtime;
+	/** The library of named functions: `lib` of `runtime/js`, or one laid over it. */
+	readonly lib: Lib;
+	/** The meaning of the language's constructs: `runtime/js`, `runtime/jq`, `runtime/fs`, or your own. */
+	readonly runtime: Runtime;
 	/** Named arguments, available as `$name`. */
 	readonly args?: Readonly<Record<string, Value>>;
 	/** Further inputs for `input` and `inputs`; none by default. */
@@ -58,7 +55,7 @@ export interface TaskFilter {
 
 export type Filter = SingleFilter | StreamFilter | TaskFilter;
 
-function createContext(options: RunOptions = {}): Context {
+function createContext(options: RunOptions): Context {
 	const inputs = (options.inputs ?? [])[Symbol.iterator]();
 	const env = options.env ?? process.env as Record<string, string>;
 	return {
@@ -86,8 +83,8 @@ function createContext(options: RunOptions = {}): Context {
  * whether the filter is a stream, and `stream` says the same; a filter that awaits is an async
  * generator function, iterated with `for await`, and `awaits` says so.
  */
-export function compile(source: string, options: RunOptions = {}): Filter {
-	const program = instantiate(source, parse(source), options.runtime ?? defaultRuntime, options.lib ?? defaultLib, createContext(options));
+export function compile(source: string, options: RunOptions): Filter {
+	const program = instantiate(source, parse(source), options.runtime, options.lib, createContext(options));
 	return Object.assign(program.filter, {
 		awaits: program.awaits,
 		stream: program.stream,
@@ -95,7 +92,7 @@ export function compile(source: string, options: RunOptions = {}): Filter {
 }
 
 /** Runs a filter over one input, collecting every output: an array, or a promise of one when the filter awaits. */
-export function run(source: string, input: Value, options: RunOptions = {}): Value[] | Promise<Value[]> {
+export function run(source: string, input: Value, options: RunOptions): Value[] | Promise<Value[]> {
 	const filter = compile(source, options);
 	if (filter.awaits) {
 		return async function() {

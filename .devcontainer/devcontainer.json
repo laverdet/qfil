@@ -1,5 +1,5 @@
 {
-	"name": "jssq",
+	"name": "qfil",
 	"build": {
 		"dockerfile": "Dockerfile"
 	},

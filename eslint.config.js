@@ -327,6 +327,12 @@ const typedTypeScriptRules = acceptTypeScriptRules({
 		ignoreArrowShorthand: true,
 		ignoreVoidOperator: true,
 	} ],
+	// `node:test` runners are safe to leave floating; they register rather than run
+	'@typescript-eslint/no-floating-promises': [ 'warn', {
+		allowForKnownSafeCalls: [
+			{ from: 'package', name: [ 'after', 'describe', 'it' ], package: 'node:test' },
+		],
+	} ],
 	'@typescript-eslint/no-inferrable-types': 'warn',
 	'@typescript-eslint/no-meaningless-void-operator': 'warn',
 	// `checksConditionals` - Conditionals are handled by ts(2801)

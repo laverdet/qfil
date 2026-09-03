@@ -11,7 +11,7 @@ import * as fs from 'node:fs';
 import { basename, join } from 'node:path';
 import { JqError } from '#/runtime/js/value.js';
 
-const marker: unique symbol = Symbol('jssq.entry');
+const marker: unique symbol = Symbol('qfil.entry');
 
 /** A directory entry as a value: its stat, read once when the entry is made. */
 export interface Entry {
