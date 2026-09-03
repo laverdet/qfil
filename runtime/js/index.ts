@@ -13,37 +13,14 @@
  *
  * `compile` takes a `lib` option, so an application may supply a library of its own.
  */
-import type * as ast from '#/compiler/ast.js';
-import type { Context, Env, Filter, Lib, LibFunction, Path, PathFilter, Render, Resumed, Stream, Value, ValueObject } from '#/compiler/filter.js';
-import { add, delpaths, field, getpath, halt, has, iterate, keys, length, recursePaths, setpath, split } from './intrinsics.js';
+import type { Context, Env, Lib, Path, Render, Resumed, Stream, Value, ValueObject } from '#/compiler/filter.js';
+import { add, delpaths, field, getpath, halt, has, iterate, keys, length, recursePaths, setpath } from './intrinsics.js';
+import { assertArray, assertNumber, assertString, unary, withFilter, withPath } from './library.js';
+import { math } from './math.js';
+import { matching, regex } from './regex.js';
+import { strings } from './strings.js';
 import { JqError, compare, describe, fromjson, isNumber, isObject, newObject, tojson, tonumber, tostring, truthy, typeOf } from './value.js';
-import { Await, constant, each, feed, firstOf, forward, isTask, overload, runtimePathFunction, streams, task, values } from '#/compiler/filter.js';
-
-export function assertString(value: Value, what: string): string {
-	if (typeof value !== 'string') {
-		throw new JqError(`${what} input must be a string`);
-	}
-	return value;
-}
-
-function assertArray(value: Value, what: string): Value[] {
-	if (!Array.isArray(value)) {
-		throw new JqError(`${what} input must be an array`);
-	}
-	return value;
-}
-
-function assertNumber(value: Value, what: string): number {
-	if (!isNumber(value)) {
-		throw new JqError(`${describe(value)} number required for ${what}`);
-	}
-	return Number(value);
-}
-
-/** A library function of the input alone. */
-export function unary(fn: (input: Value) => Value): LibFunction {
-	return _render => input => fn(input);
-}
+import { Await, each, feed, firstOf, forward, isTask, overload, runtimePathFunction, streams, task, values } from '#/compiler/filter.js';
 
 /** A stream drawn from outside the program, as `inputs` is. */
 function fromIterable(source: () => Iterable<Value>): Stream {
@@ -145,27 +122,6 @@ function fromEntries(value: Value): ValueObject {
 		result[key] = field(entry, 'value');
 	}
 	return result;
-}
-
-function join(value: Value, separator: Value): Value {
-	let result: Value = null;
-	let first = true;
-	for (const element of iterate(value)) {
-		const piece = function() {
-			if (element === null) {
-				return '';
-			} else if (typeof element === 'string') {
-				return element;
-			} else if (Array.isArray(element) || isObject(element)) {
-				throw new JqError(`${describe(element)} cannot be added to a string`);
-			} else {
-				return tojson(element);
-			}
-		}();
-		result = add(first ? '' : add(result, separator), piece);
-		first = false;
-	}
-	return result ?? '';
 }
 
 /**
@@ -310,206 +266,6 @@ function *limited<Type>(count: Value, outputs: Iterable<Type>): Generator<Type> 
 			return;
 		}
 	}
-}
-
-// Regular expressions are JavaScript's, flags included. `u` and `d` are always set, so patterns
-// are Unicode-aware and captures carry offsets; offsets are UTF-16 code units.
-
-/** Builds the RegExp of a match call: what the pattern and flags mean is the library's to say — JavaScript's reading here, jq's in the jq library. */
-export type RegexCompiler = (pattern: Value, flags: Value, extra: string) => RegExp;
-
-export function regex(pattern: Value, flags: Value, extra = ''): RegExp {
-	if (typeof pattern !== 'string') {
-		throw new JqError(`${describe(pattern)} cannot be matched, as it is not a string`);
-	} else if (flags !== null && typeof flags !== 'string') {
-		throw new JqError(`${describe(flags)} is not a string`);
-	}
-	try {
-		return new RegExp(pattern, [ ...new Set(`du${flags ?? ''}${extra}`) ].join(''));
-	} catch (error) {
-		throw new JqError((error as Error).message);
-	}
-}
-
-/** Runs `body` with a regex for each combination of the pattern and flag arguments' outputs. */
-type WithRegex = (input: Value, env: Env, body: (regex: RegExp, input: Value) => Iterable<Value>) => Iterable<Value>;
-
-/** A regex from its arguments — compiled once when both are literals, otherwise per call: the syntax is there to be read. */
-function regexOf(compile: RegexCompiler, render: Render, pattern: ast.Node, flags: ast.Node | null, extra = ''): WithRegex {
-	const literalPattern = constant(pattern);
-	const literalFlags = flags === null ? null : constant(flags);
-	if (literalPattern !== undefined && literalFlags !== undefined) {
-		const compiled = compile(literalPattern, literalFlags, extra);
-		return (input, _env, body) => body(compiled, input);
-	} else {
-		const args = streams(render, flags === null ? [ pattern ] : [ pattern, flags ], function*(_input, re, fl) {
-			yield [ re, fl ?? null ];
-		});
-		return function*(input, env, body) {
-			for (const pair of args(input, env)) {
-				const [ re, fl ] = pair as [ Value, Value ];
-				yield* body(compile(re, fl, extra), input);
-			}
-		};
-	}
-}
-
-const skipsEmpty: unique symbol = Symbol('qfil.skipsEmpty');
-
-/** Marks a regex whose empty matches do not count, as jq's `n` flag has it. */
-export function ignoringEmpty(regex: RegExp): RegExp {
-	return Object.assign(regex, { [skipsEmpty]: true });
-}
-
-function ignoresEmpty(regex: RegExp): boolean {
-	return (regex as { readonly [skipsEmpty]?: boolean })[skipsEmpty] === true;
-}
-
-/** Every match when the pattern is global, otherwise the first; a regex marked by `ignoringEmpty` counts only the nonempty ones. */
-function execAll(regex: RegExp, input: Value): RegExpExecArray[] {
-	const text = assertString(input, 'match');
-	if (regex.global) {
-		const all = [ ...text.matchAll(regex) ];
-		return ignoresEmpty(regex) ? all.filter(match => match[0] !== '') : all;
-	} else if (ignoresEmpty(regex)) {
-		// The first nonempty match: an empty one at an earlier offset does not count
-		for (const match of text.matchAll(new RegExp(regex.source, `${regex.flags}g`))) {
-			if (match[0] !== '') {
-				return [ match ];
-			}
-		}
-		return [];
-	} else {
-		const match = regex.exec(text);
-		return match === null ? [] : [ match ];
-	}
-}
-
-/** A match as jq's `match` object. */
-function matchObject(match: RegExpExecArray): ValueObject {
-	const indices: readonly ([ number, number ] | undefined)[] = match.indices!;
-	// The indices of a named group are the same pair object as its positional entry
-	const names = new Map(Object.entries<[ number, number ] | undefined>(match.indices!.groups ?? {})
-		.filter(([ , range ]) => range !== undefined)
-		.map(([ name, range ]) => [ range, name ]));
-	const captures = indices.slice(1).map((range, ii) => range === undefined
-		? { __proto__: null, offset: -1, length: 0, string: null, name: null }
-		: { __proto__: null, offset: range[0], length: range[1] - range[0], string: match[ii + 1]!, name: names.get(range) ?? null });
-	return { __proto__: null, offset: match.index, length: match[0].length, string: match[0], captures };
-}
-
-/** The named groups of a match as an object, null for the ones that did not participate. */
-function namedGroups(match: RegExpExecArray): ValueObject {
-	const result = newObject();
-	for (const [ name, string ] of Object.entries<string | undefined>(match.groups ?? {})) {
-		result[name] = string ?? null;
-	}
-	return result;
-}
-
-/**
- * `sub` and `gsub`. The replacement filter runs once per match with the named groups as its input;
- * when it yields several strings, the k-th result replaces every match with its k-th one.
- */
-function *substitute(regex: RegExp, input: Value, replacement: (groups: Value) => Iterable<Value>): Generator<string> {
-	const text = assertString(input, 'sub');
-	const edits = execAll(regex, text).map(match => ({
-		start: match.index,
-		end: match.index + match[0].length,
-		outputs: [ ...replacement(namedGroups(match)) ].map(output => typeof output === 'string' ? output : function() {
-			throw new JqError(`${describe(output)} cannot be added to a string`);
-		}()),
-	}));
-	if (edits.length === 0) {
-		yield text;
-		return;
-	}
-	const count = Math.min(...edits.map(edit => edit.outputs.length));
-	for (let kk = 0; kk < count; ++kk) {
-		let output = '';
-		let previous = 0;
-		for (const edit of edits) {
-			output += text.slice(previous, edit.start) + edit.outputs[kk]!;
-			previous = edit.end;
-		}
-		yield output + text.slice(previous);
-	}
-}
-
-function regexFunction(compile: RegexCompiler, extra: string, body: (regex: RegExp, input: Value) => Iterable<Value>): LibFunction {
-	const withRegex = (regexes: WithRegex): Stream => function*(input, env) {
-		yield* regexes(input, env, body);
-	};
-	return overload(
-		(render, pattern) => withRegex(regexOf(compile, render, pattern, null, extra)),
-		(render, pattern, flags) => withRegex(regexOf(compile, render, pattern, flags, extra)),
-	);
-}
-
-function subFunction(compile: RegexCompiler, extra: string): LibFunction {
-	const withRegex = (render: Render, regexes: WithRegex, replacementNode: ast.Node): Stream => {
-		const replacement = render.generator(replacementNode);
-		return function*(input, env) {
-			yield* regexes(input, env, (compiled, text) => substitute(compiled, text, groups => replacement(groups, env)));
-		};
-	};
-	return overload(
-		(render, pattern, replacement) => withRegex(render, regexOf(compile, render, pattern, null, extra), replacement),
-		(render, pattern, replacement, flags) => withRegex(render, regexOf(compile, render, pattern, flags, extra), replacement),
-	);
-}
-
-function *testWith(compiled: RegExp, input: Value): Generator<Value> {
-	yield ignoresEmpty(compiled) ? execAll(compiled, input).length > 0 : compiled.test(assertString(input, 'test'));
-}
-
-function matchWith(compiled: RegExp, input: Value): Value[] {
-	return execAll(compiled, input).map(matchObject);
-}
-
-function *splitWith(compiled: RegExp, input: Value): Generator<Value> {
-	const text = assertString(input, 'split');
-	const pieces: string[] = [];
-	let previous = 0;
-	for (const match of text.matchAll(compiled)) {
-		if (ignoresEmpty(compiled) && match[0] === '') {
-			continue;
-		}
-		pieces.push(text.slice(previous, match.index));
-		previous = match.index + match[0].length;
-	}
-	pieces.push(text.slice(previous));
-	yield pieces;
-}
-
-/**
- * The functions that match a regex — `test`, `match`, `split`, `sub`, `gsub` — over a compiler,
- * since what a pattern and its flags mean is the library's to say: JavaScript's reading in this
- * one, jq's in the jq library.
- */
-export function matching(compile: RegexCompiler): Lib {
-	return {
-		test: regexFunction(compile, '', testWith),
-		match: regexFunction(compile, '', matchWith),
-		sub: subFunction(compile, ''),
-		gsub: subFunction(compile, 'g'),
-		split: overload(
-			(render, separator) => values(render, [ separator ], (input, value) => split(assertString(input, 'split'), assertString(value, 'split'))),
-			(render, pattern, flags) => function*(input, env) {
-				yield* regexOf(compile, render, pattern, flags, 'g')(input, env, splitWith);
-			},
-		),
-	};
-}
-
-/** A filter argument run over the input, as `map(f)` and `select(f)` take one. */
-function withFilter(build: (filter: Stream) => Filter): (render: Render, arg: ast.Node) => Filter {
-	return (render, arg) => build(render.generator(arg));
-}
-
-/** A filter argument as a path expression, as `path(f)` and `del(f)` take one. */
-function withPath(build: (paths: PathFilter) => Filter): (render: Render, arg: ast.Node) => Filter {
-	return (render, arg) => build(render.path(arg));
 }
 
 export const lib: Lib = {
@@ -735,23 +491,9 @@ export const lib: Lib = {
 	...ordered(compare),
 	reverse: unary(input => input === null ? [] : [ ...assertArray(input, 'reverse') ].reverse()),
 	flatten: unary(flatten),
-	startswith: (render, prefix) => values(render, [ prefix ], (input, value) => assertString(input, 'startswith').startsWith(assertString(value, 'startswith'))),
-	endswith: (render, suffix) => values(render, [ suffix ], (input, value) => assertString(input, 'endswith').endsWith(assertString(value, 'endswith'))),
-	ltrimstr: (render, prefix) => values(render, [ prefix ], (input, value) => {
-		const text = assertString(input, 'ltrimstr');
-		return typeof value === 'string' && text.startsWith(value) ? text.slice(value.length) : text;
-	}),
-	rtrimstr: (render, suffix) => values(render, [ suffix ], (input, value) => {
-		const text = assertString(input, 'rtrimstr');
-		return typeof value === 'string' && value !== '' && text.endsWith(value) ? text.slice(0, -value.length) : text;
-	}),
+	...strings,
 	...matching(regex),
-	join: (render, separator) => values(render, [ separator ], (input, value) => join(input, value)),
-	ascii_downcase: unary(input => assertString(input, 'ascii_downcase').replace(/[A-Z]+/g, text => text.toLowerCase())),
-	ascii_upcase: unary(input => assertString(input, 'ascii_upcase').replace(/[a-z]+/g, text => text.toUpperCase())),
-	floor: unary(input => Math.floor(assertNumber(input, 'floor'))),
-	sqrt: unary(input => Math.sqrt(assertNumber(input, 'sqrt'))),
-	pow: (render, base, exponent) => values(render, [ base, exponent ], (_input, left, right) => assertNumber(left, 'pow') ** assertNumber(right, 'pow')),
+	...math,
 	halt: _render => () => halt(0),
 	halt_error: overload(
 		unary(input => halt(5, input)),
