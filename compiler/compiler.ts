@@ -19,10 +19,10 @@ import { Bounce, Break, CompileError, Tail, allSingle, driven, each, feed, gener
 interface Definition {
 	/** The body with no awaiting filter arguments; `variant` holds the others. */
 	readonly value: Filter;
-	/** The body for a set of awaiting filter arguments, a bit per filter parameter; call sites render what they need at compile time. */
-	readonly variant: (bitmap: number) => Filter;
+	/** The body for a set of awaiting filter arguments, a '0' or '1' per filter parameter; call sites render what they need at compile time. */
+	readonly variant: (params: string) => Filter;
 	readonly path: PathFilter;
-	readonly pathVariant: (bitmap: number) => PathFilter;
+	readonly pathVariant: (params: string) => PathFilter;
 }
 
 /** What a definition is at runtime: the environment it was evaluated in, to be extended per call. */
@@ -48,8 +48,8 @@ interface Callee {
 	readonly streams: boolean;
 	/** Whether a value argument awaits, making the environments a task's yields. */
 	readonly task: boolean;
-	/** The awaiting filter arguments, a bit per filter parameter: which body variant the call needs. */
-	readonly params: number;
+	/** The awaiting filter arguments, a '0' or '1' per filter parameter: which body variant the call needs. */
+	readonly params: string;
 }
 
 /** One rendering of a definition's body, for one set of awaiting filter arguments. */
@@ -75,12 +75,12 @@ interface DefBinding {
 	readonly kind: 'def';
 	readonly slot: number;
 	readonly def: ast.Def;
-	/** The body per set of awaiting filter arguments, a bit per filter parameter. */
-	readonly variants: Map<number, Variant>;
-	readonly pathVariants: Map<number, PathVariant>;
-	/** Renders the body for a bitmap; set by `def` once the body's scope exists. */
-	render?: (bitmap: number) => Filter;
-	renderPath?: (bitmap: number) => PathFilter;
+	/** The body per set of awaiting filter arguments, a '0' or '1' per filter parameter. */
+	readonly variants: Map<string, Variant>;
+	readonly pathVariants: Map<string, PathVariant>;
+	/** Renders the body for a set of awaiting arguments; set by `def` once the body's scope exists. */
+	render?: (params: string) => Filter;
+	renderPath?: (params: string) => PathFilter;
 }
 
 /** A filter parameter: its frame holds a closure. */
@@ -552,9 +552,9 @@ class Compiler {
 					// The variant's own path form is being rendered: assume it does not await
 					variant.assumed = true;
 				}
-				const paths = callee.params === 0
-					? (bound: Bound) => bound.definition.path
-					: (bound: Bound) => bound.definition.pathVariant(callee.params);
+				const paths = callee.params.includes('1')
+					? (bound: Bound) => bound.definition.pathVariant(callee.params)
+					: (bound: Bound) => bound.definition.path;
 				const called: PathFilter = callee.task
 					? function*(path, value, env) {
 						const bound = lookup(env, distance) as Bound;
@@ -574,29 +574,29 @@ class Compiler {
 	}
 
 	/** The body variant a call's awaiting filter arguments select, rendered on first need. */
-	private variant(binding: DefBinding, bitmap: number): Variant {
-		const existing = binding.variants.get(bitmap);
+	private variant(binding: DefBinding, params: string): Variant {
+		const existing = binding.variants.get(params);
 		if (existing !== undefined) {
 			return existing;
 		}
 		if (binding.render === undefined) {
 			throw new Error('Impossible: a call before its definition was reached');
 		}
-		binding.render(bitmap);
-		return binding.variants.get(bitmap)!;
+		binding.render(params);
+		return binding.variants.get(params)!;
 	}
 
 	/** As {@link variant}, for the path form. */
-	private pathVariant(binding: DefBinding, bitmap: number): PathVariant {
-		const existing = binding.pathVariants.get(bitmap);
+	private pathVariant(binding: DefBinding, params: string): PathVariant {
+		const existing = binding.pathVariants.get(params);
 		if (existing !== undefined) {
 			return existing;
 		}
 		if (binding.renderPath === undefined) {
 			throw new Error('Impossible: a call before its definition was reached');
 		}
-		binding.renderPath(bitmap);
-		return binding.pathVariants.get(bitmap)!;
+		binding.renderPath(params);
+		return binding.pathVariants.get(params)!;
 	}
 
 	/** A call to a definition: its frame, then each argument, pushed on the environment it closed over. */
@@ -604,9 +604,9 @@ class Compiler {
 		const distance = scope.distance(binding.slot);
 		const callee = this.callee(binding, node, scope);
 		const variant = this.variant(binding, callee.params);
-		const body = callee.params === 0
-			? (bound: Bound) => bound.definition.value
-			: (bound: Bound) => bound.definition.variant(callee.params);
+		const body = callee.params.includes('1')
+			? (bound: Bound) => bound.definition.variant(callee.params)
+			: (bound: Bound) => bound.definition.value;
 		if (variant.shape === undefined) {
 			// The variant's own body is being rendered: assume a single value, and be told if not
 			variant.assumed = true;
@@ -674,8 +674,7 @@ class Compiler {
 	 */
 	private callee(binding: DefBinding, node: ast.Call, scope: Scope): Callee {
 		const filters: Filter[] = [];
-		let params = 0;
-		let filterIndex = 0;
+		let params = '';
 		const frames = binding.def.params.map((param, ii): (env: Env, values: Value[]) => unknown => {
 			const arg = node.args[ii]!;
 			if (!param.value) {
@@ -683,18 +682,12 @@ class Compiler {
 				if (passed !== undefined) {
 					// `f(g)` where `g` is itself a parameter: the caller's closure passes through
 					// unwrapped, so a recursion hands the same closure all the way down
-					if (passed.task) {
-						params |= 1 << filterIndex;
-					}
-					filterIndex += 1;
+					params += passed.task ? '1' : '0';
 					const distance = scope.distance(passed.slot);
 					return env => lookup(env, distance);
 				}
 				const closure = this.closure(arg, scope);
-				if (isTask(closure.generator)) {
-					params |= 1 << filterIndex;
-				}
-				filterIndex += 1;
+				params += isTask(closure.generator) ? '1' : '0';
 				return env => ({ closure, env } satisfies BoundClosure);
 			}
 			const position = filters.push(this.value(arg, scope)) - 1;
@@ -779,10 +772,10 @@ class Compiler {
 		}
 		// A variant renders with each filter parameter told whether its argument awaits; renders
 		// nest — a self-call may need another variant mid-render — so the flags are restored after
-		const withParams = <Type>(bitmap: number, render: () => Type): Type => {
+		const withParams = <Type>(params: string, render: () => Type): Type => {
 			const saved = filterParams.map(param => param.task);
 			filterParams.forEach((param, ii) => {
-				param.task = ((bitmap >> ii) & 1) === 1;
+				param.task = params[ii] === '1';
 			});
 			try {
 				return render();
@@ -792,10 +785,10 @@ class Compiler {
 				});
 			}
 		};
-		const renderBody = (bitmap: number): Filter => {
+		const renderBody = (params: string): Filter => {
 			const variant: Variant = { shape: undefined, assumed: false, bouncy: false, value: undefined };
-			binding.variants.set(bitmap, variant);
-			return withParams(bitmap, () => {
+			binding.variants.set(params, variant);
+			return withParams(params, () => {
 				const outer = this.rendering;
 				this.rendering = variant;
 				// The body itself is the definition's last act: a recursive call there is a tail call
@@ -811,10 +804,10 @@ class Compiler {
 				return value;
 			});
 		};
-		const renderPath = (bitmap: number): PathFilter => {
+		const renderPath = (params: string): PathFilter => {
 			const variant: PathVariant = { awaits: undefined, assumed: false, path: undefined };
-			binding.pathVariants.set(bitmap, variant);
-			return withParams(bitmap, () => {
+			binding.pathVariants.set(params, variant);
+			return withParams(params, () => {
 				let path = this.path(node.body, bodyScope);
 				if (variant.assumed && isTask(path)) {
 					// A self-call in path mode assumed no awaiting and there is some: render again
@@ -828,18 +821,19 @@ class Compiler {
 		};
 		binding.render = renderBody;
 		binding.renderPath = renderPath;
-		const value = renderBody(0);
-		const pathOf = (bitmap: number): PathFilter => this.pathVariant(binding, bitmap).path ?? function(): never {
+		const base = '0'.repeat(filterParams.length);
+		const value = renderBody(base);
+		const pathOf = (params: string): PathFilter => this.pathVariant(binding, params).path ?? function(): never {
 			throw new Error('Impossible: an unrendered path variant');
 		}();
 		const definition: Definition = {
 			value,
-			variant: bitmap => this.variant(binding, bitmap).value ?? function(): never {
+			variant: params => this.variant(binding, params).value ?? function(): never {
 				throw new Error('Impossible: an unrendered variant');
 			}(),
 			// The path form of the body is rendered when a call in path mode first asks for it
 			get path() {
-				return pathOf(0);
+				return pathOf(base);
 			},
 			pathVariant: pathOf,
 		};

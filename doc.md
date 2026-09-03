@@ -158,7 +158,7 @@ loop, and a single value keeps its plain call — a program with nothing to awai
 as before. That covers the whole language: path expressions and assignment build forwarding loops
 when something under them awaits (`.a = later(1)`, `del(.[later(1)])`, `path(… as $x | …)`), and
 a definition passes tasks through its filter parameters — the body is rendered once per set of
-awaiting arguments, a bit per filter parameter, so `def f(g): g` forwards `f(later(1))` while
+awaiting arguments, a flag per filter parameter, so `def f(g): g` forwards `f(later(1))` while
 `f(1)` compiles exactly as it always did. `render.value` and `render.generator` refuse a task,
 so a library function that runs a stream itself — `limit`, `first`, `map`, `sort_by` — rejects
 an awaiting argument at compile time rather than mistaking an `Await` for a value at runtime;
