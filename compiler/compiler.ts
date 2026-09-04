@@ -627,14 +627,14 @@ class Compiler {
 				return (input, env) => {
 					const bound = lookup(env, distance) as Bound;
 					const [ frames ] = callee(bound, env, input);
-					// Single-valued, as the shape says; a `Bounce` travels as a `Value`
-					return new Bounce(body(bound) as Single, input, frames!) as unknown as Value;
+					// Single-valued, as the shape says
+					return Bounce.of(body(bound) as Single, input, frames!);
 				};
 			}
 			return function*(input, env) {
 				const bound = lookup(env, distance) as Bound;
 				const [ frames ] = callee(bound, env, input);
-				yield new Tail(() => (body(bound) as Stream)(input, frames!)) as unknown as Value;
+				yield Tail.of(() => (body(bound) as Stream)(input, frames!));
 			};
 		}
 		if (variant.shape === 'stream' || variant.shape === 'task' || callee.streams) {

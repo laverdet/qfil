@@ -171,6 +171,9 @@ back in (as a `JqError` when the body meant it to be caught) where the program's
 catch it. A filter that awaits therefore compiles to an async generator function — `awaits` is
 true, and `for await` iterates its outputs as they settle — while everything else keeps its sync
 shape; `run` still returns an array when nothing awaited and a promise of one once something has.
+The channel itself the types cannot spell: `awaited` — yield an `Await`, return its settlement —
+and `forward`, with `Bounce.of` and `Tail.of` on the tail-call channel, are the four expressions
+where they stop trying, and everything between them is typed as it runs.
 
 Whether a filter is a task is read off the function at instantiation, as `isStream` is: a
 construct over a task builds an `Await`-forwarding loop (`each`), everything else keeps its plain

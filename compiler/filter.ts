@@ -148,15 +148,29 @@ export class Break extends Error {
  * every frame in between just passes this along, so nothing below the driver becomes async.
  */
 export class Await {
-	readonly promise: Promise<Value>;
+	/** What the driver settles; the resolution — whatever it is — resumes the yield. */
+	readonly promise: Promise<unknown>;
 
-	constructor(promise: Promise<Value>) {
+	constructor(promise: Promise<unknown>) {
 		this.promise = promise;
 	}
 }
 
-/** What resumes a task's yield: an `Await`'s settlement, and nothing after a plain value. */
-export type Resumed = Value | undefined;
+/**
+ * What resumes a task's yield: for an `Await`, its promise's own resolution — `awaited` narrows
+ * it back — and nothing after a plain value.
+ */
+export type Resumed = unknown;
+
+/**
+ * Yields an `Await` for the driver and returns its settlement; a rejection is thrown in here,
+ * where the caller's own `try` may catch it. The instruction travels the stream as a value the
+ * types cannot spell, and this expression — with `forward`, `Bounce.of` and `Tail.of` — is where
+ * they stop trying: everything between them is typed as it runs.
+ */
+export function *awaited<Type>(promise: Promise<Type>): Generator<never, Type, Resumed> {
+	return (yield new Await(promise) as unknown as never) as Type;
+}
 
 const taskShape: unique symbol = Symbol('qfil.task');
 
@@ -175,10 +189,10 @@ export function isTask(fn: (...args: never) => unknown): boolean {
  * rejection into it, where the stream's own `try` may catch it. Only a settlement arrives at the
  * forwarding yield, so an error coming out of this frame is the stream's own.
  */
-export function *forward<Item, Out>(waiting: Await, iterator: Iterator<Item, unknown, Resumed>): Generator<Out, IteratorResult<Item, unknown>, Resumed> {
+export function *forward<Item>(waiting: Await, iterator: Iterator<Item, unknown, Resumed>): Generator<never, IteratorResult<Item, unknown>, Resumed> {
 	try {
 		// A forwarded instruction is invisible to the types, as it is to every frame it passes
-		return iterator.next(yield waiting as unknown as Out);
+		return iterator.next(yield waiting as unknown as never);
 	} catch (error) {
 		if (iterator.throw === undefined) {
 			throw error;
@@ -453,7 +467,7 @@ export function abreast<Args extends readonly unknown[], Item, Out>(source: (...
 				if (waits.length === 0) {
 					throw new Error('Nothing was awaited');
 				}
-				yield new Await(Promise.race(waits)) as unknown as Out;
+				yield* awaited(Promise.race(waits));
 			}
 		} finally {
 			for (const lane of lanes) {
@@ -481,6 +495,11 @@ export class Bounce {
 		this.env = env;
 	}
 
+	/** A bounce for the tail channel, as the `Value` the types cannot spell. */
+	static of(body: Single, input: Value, env: Env): Value {
+		return new Bounce(body, input, env) as unknown as Value;
+	}
+
 	/** One call: the value, or the next bounce. */
 	step(): Value {
 		return this.body(this.input, this.env);
@@ -502,6 +521,11 @@ export class Tail {
 
 	constructor(stream: () => Iterable<Value>) {
 		this.stream = stream;
+	}
+
+	/** A stream's tail call, as the `Value` the types cannot spell. */
+	static of(stream: () => Iterable<Value>): Value {
+		return new Tail(stream) as unknown as Value;
 	}
 }
 
@@ -763,9 +787,8 @@ export function promises(render: Render, args: readonly ast.Node[], body: (input
 	const streams = args.map(arg => generator(render.filter(arg)));
 	return task(function*(input, env) {
 		yield* each(product(streams, input, env, 'first'), function*(vals) {
-			// The driver resumes an `Await` with a value, whatever the types can spell of it
-			const value = yield new Await(body(input, ...vals)) as unknown as Value;
-			yield value as Value;
+			const value = yield* awaited(body(input, ...vals));
+			yield value;
 		});
 	});
 }

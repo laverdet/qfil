@@ -15,8 +15,8 @@ import { arities } from './compiler/filter.js';
 import { parse } from './compiler/parser.js';
 import { tojson } from './runtime/js/value.js';
 
-export type { Context, Env, Filter as LibFilter, Handled, Handler, Lib, LibFunction, Path, PathFilter, Render, Runtime, Stream, Value, ValueObject } from './compiler/filter.js';
-export { Await, Bounce, Break, CompileError, Tail, abreast, combine, combineStreams, constant, driven, each, feed, generator, isStream, isTask, once, over, overload, pathForm, promises, runtimePathFunction, settle, streams, task, unrolled, values } from './compiler/filter.js';
+export type { Context, Env, Filter as LibFilter, Handled, Handler, Lib, LibFunction, Path, PathFilter, Render, Resumed, Runtime, Stream, Value, ValueObject } from './compiler/filter.js';
+export { Await, Bounce, Break, CompileError, Tail, abreast, awaited, combine, combineStreams, constant, driven, each, feed, generator, isStream, isTask, once, over, overload, pathForm, promises, runtimePathFunction, settle, streams, task, unrolled, values } from './compiler/filter.js';
 export { ParseError, definitions, parse } from './compiler/parser.js';
 export { Halt, JqError } from './runtime/js/value.js';
 

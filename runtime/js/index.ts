@@ -21,7 +21,7 @@ import { math } from './math.js';
 import { matching, regex } from './regex.js';
 import { strings } from './strings.js';
 import { JqError, compare, describe, fromjson, isNumber, isObject, newObject, tojson, tonumber, tostring, truthy, typeOf } from './value.js';
-import { Await, each, feed, firstOf, forward, isTask, overload, runtimePathFunction, streams, task, values } from '#/compiler/filter.js';
+import { Await, awaited, each, feed, firstOf, forward, isTask, overload, runtimePathFunction, streams, task, values } from '#/compiler/filter.js';
 
 /** The pulled input, or the language's error past the last one. */
 function pulled(next: IteratorResult<Value>): Value {
@@ -532,8 +532,7 @@ export const lib: Lib = {
 		const { inputs } = this;
 		if (inputs.awaits) {
 			return task(function*(): Generator<Value, void, Resumed> {
-				const next = yield new Await(inputs.iterator.next() as unknown as Promise<Value>) as unknown as Value;
-				yield pulled(next as unknown as IteratorResult<Value>);
+				yield pulled(yield* awaited(inputs.iterator.next()));
 			});
 		} else {
 			return () => pulled(inputs.iterator.next());
@@ -544,12 +543,11 @@ export const lib: Lib = {
 		if (inputs.awaits) {
 			return task(function*(): Generator<Value, void, Resumed> {
 				while (true) {
-					const next = yield new Await(inputs.iterator.next() as unknown as Promise<Value>) as unknown as Value;
-					const result = next as unknown as IteratorResult<Value>;
-					if (result.done === true) {
+					const next = yield* awaited(inputs.iterator.next());
+					if (next.done === true) {
 						return;
 					}
-					yield result.value;
+					yield next.value;
 				}
 			});
 		} else {
