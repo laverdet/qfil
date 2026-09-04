@@ -11,6 +11,7 @@
 import type { Context, Lib, Runtime, Value } from './compiler/filter.js';
 import * as process from 'node:process';
 import { instantiate } from './compiler/compiler.js';
+import { arities } from './compiler/filter.js';
 import { parse } from './compiler/parser.js';
 import { JqError, tojson } from './runtime/js/value.js';
 
@@ -75,6 +76,11 @@ function createContext(options: RunOptions): Context {
 		stderr: options.stderr ?? (value => {
 			process.stderr.write(tojson(value));
 		}),
+		builtins: () => [ ...new Set([
+			...Object.entries(options.lib).flatMap(([ name, fn ]) =>
+				(fn[arities] ?? [ Math.max(fn.length - 1, 0) ]).map(count => `${name}/${count}`)),
+			...(options.runtime.prelude?.() ?? []).map(def => `${def.name}/${def.params.length}`),
+		]) ],
 	};
 }
 

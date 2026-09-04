@@ -1,5 +1,8 @@
 /** The language, case by case against the `jq` binary — with the departures `divergent` documents. */
-import { agree, divergent } from './harness.js';
+import type { Value } from '#/index.js';
+import * as assert from 'node:assert/strict';
+import { describe, it } from 'node:test';
+import { agree, divergent, run } from './harness.js';
 
 agree('paths and literals', [
 	[ '.', { a: 1 } ],
@@ -410,7 +413,6 @@ agree('builtins', [
 	[ 'strftime("%Y")', 'a' ],
 	[ 'strptime("%Y-%m-%d"), strptime("%d %B %Y")', '2015-03-05' ],
 	[ 'strptime("%Y")', 'abc' ],
-	[ 'fromdate', '2015-03-05T23:51:47.5Z' ],
 ]);
 
 divergent('regular expressions are JavaScript\'s', [
@@ -472,6 +474,7 @@ agree('the prelude: builtins defined in the language', [
 	[ '[.[] | in({"a": 1, "b": 2})]', [ 'a', 'x' ] ],
 	[ '[.[] | in([10, 20])]', [ 0, 5 ] ],
 	[ '[limit(5; recurse(. * 2; . < 100))]', 1 ],
+	[ '[recurse]', { a: [ 1, { b: 2 } ] } ],
 	[ 'last(range(10))' ],
 	[ 'last(empty)' ],
 	[ 'nth(2)', [ 'a', 'b', 'c', 'd' ] ],
@@ -521,3 +524,141 @@ agree('the source of `as` runs up to a comma', [
 	[ '{a: 2 as $x | $x}' ],
 	[ '[1 as $x | $x]' ],
 ]);
+
+agree('the math tail', [
+	[ '[.[] | fabs, ceil, floor, trunc, round]', [ -1.7, 2.5, 3.5, -1.5, -2.5, 2.3 ] ],
+	[ '-0.5 | round' ],
+	[ '[.[] | sqrt]', [ 4, 2, 0.25 ] ],
+	[ '[.[] | cbrt]', [ -8, 0.5 ] ],
+	[ '[.[] | exp, expm1]', [ 0, 1, 2, 3, 0.1 ] ],
+	[ '[.[] | log, log2, log10, log1p]', [ 1, 8, 100, 2, 0.5 ] ],
+	[ '[.[] | sin, cos, tan, sinh, cosh, tanh]', [ 0, 1, -0.5 ] ],
+	[ '[.[] | asin, atan, asinh]', [ 0, 0.5, 1 ] ],
+	[ '0 | atanh' ],
+	[ '[.[] | acos]', [ 1, 0.5 ] ],
+	[ '1 | acosh' ],
+	[ '[hypot(3; 4), atan2(1; 1), pow(2; 10)]' ],
+	[ 'infinite, (nan | isnan), (nan | tojson)' ],
+	[ '[.[] | isinfinite, isfinite, isnormal]', [ 1, 0 ] ],
+	[ '[infinite, -infinite | isinfinite, isfinite, isnormal]' ],
+	[ '1e-320 | isnormal' ],
+	[ 'sqrt', 'x' ],
+	[ 'pow(2; "x")' ],
+]);
+
+agree('the strings tail', [
+	[ 'explode', 'abc' ],
+	[ 'explode | implode', 'héllo 😀' ],
+	[ '[104, 105] | implode' ],
+	[ '["x"] | implode' ],
+	[ 'utf8bytelength', 'héllo' ],
+	[ 'utf8bytelength', 'a😀b' ],
+	[ '[ltrim, rtrim, trim]', ' \tx y\n ' ],
+	[ '[ltrim, rtrim, trim]', 'x' ],
+	[ 'trimstr("x")', 'xxaxx' ],
+	[ 'trimstr("ab")', 'abZab' ],
+	[ '[index("c"), rindex("bc"), indices("bc")]', 'abcbc' ],
+	[ 'indices("aa")', 'aaa' ],
+	[ 'indices("")', 'abc' ],
+	[ 'indices("x")', '' ],
+	[ 'indices(1)', null ],
+	[ 'indices([1, 2])', [ 1, 2, 1, 2, 1 ] ],
+	[ 'indices(1)', [ 0, 1, 2, 1 ] ],
+	[ '[index([1, 2]), rindex([1, 2])]', [ 1, 2, 1, 2 ] ],
+	[ 'indices("a")', 1 ],
+	[ 'contains("b"), contains("x")', 'abc' ],
+	[ 'contains(["b"])', [ 'ab', 'c' ] ],
+	[ 'contains({a: {}}), contains({a: {b: 2}}), contains({c: 1})', { a: { b: 1 }, c: 1 } ],
+	[ 'contains(1)', 1 ],
+	[ 'contains(["a"])', 'ab' ],
+	[ '"b" | inside("abc"), inside("xyz")' ],
+	[ '[1] | inside([[1], 2])' ],
+]);
+
+agree('the order seam tail', [
+	[ 'min, max', [ 3, 1, 2 ] ],
+	[ 'min, max', [] ],
+	[ 'min_by(.a), max_by(.a)', [ { a: 1, i: 0 }, { a: 2 }, { a: 1, i: 1 } ] ],
+	[ 'min_by(.[])', [ [ 1 ], [ 0, 9 ] ] ],
+	[ 'unique_by(. % 2)', [ 1, 2, 2, 3 ] ],
+	[ 'unique_by(length)', [ 'a', 'bb', 'c', 'ddd' ] ],
+	[ '[bsearch(3), bsearch(4), bsearch(0)]', [ 1, 3, 5 ] ],
+	[ 'bsearch(1)', [] ],
+	[ 'bsearch("b")', [ 'a', 'c' ] ],
+]);
+
+agree('streams', [
+	[ '[tostream]', [ 1, [ 2, 3 ] ] ],
+	[ '[tostream]', [ [], {} ] ],
+	[ '[tostream]', { a: { b: 1 } } ],
+	[ '[tostream]', 5 ],
+	[ '[tostream]', [] ],
+	[ '[fromstream(tostream)]', { a: [ 1, { b: null } ], c: false } ],
+	[ '[1 | truncate_stream([1, [ 2, 3 ]] | tostream)]' ],
+	[ '[fromstream([[0], 1], [[1, 0], 2], [[1, 1], 3], [[1, 1]], [[1]])]' ],
+]);
+
+agree('the odds and ends', [
+	[ 'env | type' ],
+	[ '$ENV | type' ],
+	[ '(env.PATH == $ENV.PATH)' ],
+	[ 'format("json"), format("text")', [ 'a', 1 ] ],
+	[ 'format("csv")', [ 1, 'a' ] ],
+	[ '@csv, @tsv, format("csv"), format("tsv")', [ 1, 'a"b', null, true ] ],
+	[ '@tsv', [ 'a\tb\nc\\d', 1 ] ],
+	[ '@html', '<b>&\'"</b>' ],
+	[ '@uri', 'a b&c=!*\'()' ],
+	[ '@sh', [ 'a b', 'it\'s', 3 ] ],
+	[ '@sh', 'plain' ],
+	[ '@csv', [ [ 1 ] ] ],
+	[ '@sh', { a: 1 } ],
+	[ '@base64 | @base64d', 'hi there' ],
+	[ 'format("nope")', null ],
+
+	[ 'debug("m")', 1 ],
+	[ 'now | floor | . > 1400000000' ],
+	[ 'now | type' ],
+	[ '"2015-03-05T23:51:47Z" | fromdate' ],
+	[ '"x" | fromdate' ],
+	[ '[limit(3; skip(2; range(10)))]' ],
+	[ '[skip(0; 1, 2)]' ],
+	[ 'skip(-1; 1)' ],
+	[ '[.[] | flatten, flatten(1), flatten(0)]', [ [ 1, [ 2, [ 3 ] ] ] ] ],
+	[ 'flatten(-1)', [] ],
+	[ 'keys_unsorted', { b: 1, a: 2 } ],
+	[ 'keys_unsorted', [ 5, 6 ] ],
+	[ 'keys_unsorted', 1 ],
+	[ 'JOIN({a: 1}; .k)', [ { k: 'a' }, { k: 'b' } ] ],
+	[ 'null | [JOIN({a: 5}; ({k: "a"}, {k: "b"}); .k)]' ],
+	[ 'null | [JOIN({a: 5}; ({k: "a"}, {k: "b"}); .k; [.[0].k, .[1]])]' ],
+]);
+
+divergent('what only the binary can say', [
+	[ 'have_decnum', null, [ false ] ],
+	[ 'have_literal_numbers', null, [ false ] ],
+	[ 'input_line_number', null, [ 0 ] ],
+	[ 'get_search_list', null, 'error' ],
+	[ 'modulemeta', 'x', 'error' ],
+	[ '1 | j0', null, 'error' ],
+	// A ulp astray from this machine's libm, or a -0 the JSON printer cannot spell
+	[ '27 | cbrt', null, [ 3 ] ],
+	[ '0.5 | atanh', null, [ 0.5493061443340548 ] ],
+	[ '2 | acosh', null, [ 1.3169578969248166 ] ],
+	[ 'input_filename', null, [ null ] ],
+	// `todate` and `fromdate` speak ISO through `Date`: milliseconds written, fractions read
+	[ '1425599507 | todate', null, [ '2015-03-05T23:51:47.000Z' ] ],
+	[ '"2015-03-05T23:51:47.5Z" | fromdate', null, [ 1425599507.5 ] ],
+	[ '1 | todateiso8601', null, 'error' ],
+	[ '1 | erf', null, 'error' ],
+	[ 'jn(2; 1)', null, 'error' ],
+]);
+
+void describe('builtins', () => {
+	it('lists the library and the prelude', () => {
+		const [ names ] = run('builtins', null) as [ Value[] ];
+		assert.ok(names.length > 150);
+		assert.ok(names.includes('length/0'));
+		assert.ok(names.includes('map_values/1'));
+		assert.ok(names.includes('atan2/2'));
+	});
+});

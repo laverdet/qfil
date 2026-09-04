@@ -60,11 +60,11 @@ function ours(filter: string, input: Value, inputs: readonly Value[] = [], optio
 }
 
 /** Cases where this implementation deliberately differs from jq 1.8. */
-export function divergent(name: string, cases: readonly (readonly [ filter: string, input: Value, expected: Value[] | 'error' ])[]): void {
+export function divergent(name: string, cases: readonly (readonly [ filter: string, input: Value, expected: Value[] | 'error' ])[], options?: Partial<RunOptions>): void {
 	describe(name, () => {
 		for (const [ filter, input, expected ] of cases) {
 			it(filter, () => {
-				assert.deepEqual(ours(filter, input), expected);
+				assert.deepEqual(ours(filter, input, [], options), expected);
 			});
 		}
 	});

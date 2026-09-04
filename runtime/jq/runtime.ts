@@ -6,6 +6,7 @@
  */
 import type * as ast from '#/compiler/ast.js';
 import type { Runtime, Value } from '#/compiler/filter.js';
+import { prelude } from './prelude.js';
 import { Spelled, compare, spelled } from './value.js';
 import { combine } from '#/compiler/filter.js';
 import { negate as negateNumber } from '#/runtime/js/intrinsics.js';
@@ -28,6 +29,7 @@ function negate(value: Value): Value {
 
 export const runtime: Runtime = {
 	...js,
+	prelude,
 	literal: {
 		value: node => {
 			const value = literal(node);

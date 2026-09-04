@@ -4,6 +4,8 @@
  */
 import type { Lib } from '#/compiler/filter.js';
 import type { RegexCompiler } from '#/runtime/js/regex.js';
+import { dates } from './date.js';
+import { math } from './math.js';
 import { compare, fromjson, tonumber } from './value.js';
 import { lib as js, ordered } from '#/runtime/js/index.js';
 import { assertString, unary } from '#/runtime/js/library.js';
@@ -83,6 +85,9 @@ export const lib: Lib = {
 	...js,
 	...ordered(compare),
 	...matching(oniguruma),
+	...math,
+	...dates,
 	tonumber: unary(tonumber),
+	have_literal_numbers: _render => () => true,
 	fromjson: unary(input => fromjson(assertString(input, 'fromjson'))),
 };

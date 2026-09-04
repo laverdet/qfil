@@ -36,6 +36,16 @@ implementation deliberately differs:
   `{"1":2,"b":1}`). Every object the language makes has a null prototype, so `__proto__` is an
   ordinary key.
 - Error messages approximate jq's; `try … catch .` sees a message of the same general form.
+- The jq flavour's library covers jq 1.8's builtins; the JavaScript runtime's carries what
+  `Math` speaks, and the C-extended tail — `frexp`, `ldexp`, `nearbyint`, the gamma family — is
+  the jq flavour's own, as is the broken-down dialect — `gmtime`, `mktime`, `strftime`,
+  `strptime` — and the iso8601 aliases. The JavaScript runtime tells `now` as the epoch second,
+  and `todate` and `fromdate` speak ISO-8601 UTC through `Date`: milliseconds written, fractional
+  seconds read. The edges of C are left honest: the Bessel functions and
+  `erf`/`erfc` refuse by name; a transcendental's last digit may differ from a libm's; `-0` prints
+  as `0`; `%s` and `strftime`'s zone directives read the broken-down time as UTC where C consults
+  the timezone; `input_filename` is null and `input_line_number` 0; the module system —
+  `modulemeta`, `get_search_list` and kin — does not exist and says so.
 - Numbers are doubles, printed as JavaScript prints them (`1e+20` comes out as
   `100000000000000000000`). The jq runtime (`runtime/jq`) keeps a literal's spelling as jq 1.7
   does — `1.000`, `1E+2`, `11.0` for `1.10e1` — through variables, containers, `tostring`,
@@ -194,7 +204,8 @@ when a program first compiles against it and never again — `abs`, `map_values`
 as if the program began with them; its own definitions shadow them as inner scopes do. The source
 is parsed once per process, and a definition's body is rendered only when a program first calls
 it, so an unused builtin costs its binding alone. A runtime laid over another inherits its prelude
-by the same spread as everything else, and the definitions take on the new runtime's semantics
+by the same spread as everything else — or composes its own, as the jq flavour lays the date
+family over the JavaScript prelude — and the definitions take on the new runtime's semantics
 unrewritten: `abs` compares with jq's order under the jq runtime because `<` does.
 
 ### The filesystem runtime
@@ -245,7 +256,8 @@ only calls into a recursion pay for any of this; everything else compiles as bef
   `Editor`, formats.
 - `runtime/js/value.ts` — comparison, equality and JSON conversion over the contract's values.
 - `runtime/jq/` — jq's numbers and order: spelled numbers as boxed `Number`s, canonical spelling,
-  jq's total order, and the runtime and library laid over the JavaScript ones.
+  jq's total order, the C-extended mathematics (`math.ts`) and time dialect (`date.ts`), and the
+  runtime and library laid over the JavaScript ones.
 - `runtime/fs/` — the filesystem as values: branded stat objects, and traversal (`.[]`, `..`)
   laid over the JavaScript runtime.
 - `index.ts` — `compile`, `run`, `parse`; `bin/jsjq.ts` and `bin/fq.ts` — the binaries, over

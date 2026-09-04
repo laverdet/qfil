@@ -110,6 +110,8 @@ export interface Context {
 	readonly inputs: () => Iterable<Value>;
 	readonly debug: (value: Value) => void;
 	readonly stderr: (value: Value) => void;
+	/** Every name the library and the prelude define, as `name/arity`, for `builtins`. */
+	readonly builtins: () => Value[];
 }
 
 /** A program that cannot be instantiated: a name that is not defined, a format that does not exist. */
@@ -573,6 +575,9 @@ export async function *driven(outputs: Iterable<Value>): AsyncGenerator<Value, v
 /** A library function's path form, when it has one: `select`, `first`, `getpath`. */
 export const pathForm: unique symbol = Symbol('qfil.path');
 
+/** The arities an `overload` serves, for `builtins` to list; a plain function's is its length. */
+export const arities: unique symbol = Symbol('qfil.arities');
+
 /**
  * A library function, keyed by name: given a `Render` and the syntax of its arguments, and called
  * with the context as `this`, it returns the filter of a call to it. Its parameters are `render`
@@ -583,6 +588,7 @@ export const pathForm: unique symbol = Symbol('qfil.path');
 export interface LibFunction {
 	(this: Context, render: Render, ...args: readonly ast.Node[]): Filter;
 	readonly [pathForm]?: (this: Context, render: Render, ...args: readonly ast.Node[]) => PathFilter;
+	readonly [arities]?: readonly number[];
 }
 
 export type Lib = Readonly<Record<string, LibFunction>>;
@@ -600,7 +606,7 @@ export function overload(...alternatives: readonly LibFunction[]): LibFunction {
 	const pick = (args: readonly ast.Node[]): LibFunction => alternatives.find(alternative => alternative.length === args.length + 1) ?? function() {
 		throw new CompileError(`no definition takes ${args.length} argument${args.length === 1 ? '' : 's'}`);
 	}();
-	return runtimePathFunction(
+	return Object.assign(runtimePathFunction(
 		function(this: Context, ...call: [ Render, ...ast.Node[] ]) {
 			const [ render, ...args ] = call;
 			return pick(args).call(this, render, ...args);
@@ -609,7 +615,7 @@ export function overload(...alternatives: readonly LibFunction[]): LibFunction {
 			const [ render, ...args ] = call;
 			return pathCall(pick(args), this, render, args);
 		},
-	);
+	), { [arities]: alternatives.map(alternative => Math.max(alternative.length - 1, 0)) });
 }
 
 const GeneratorFunction = Object.getPrototypeOf(function*() {}) as { constructor: new () => unknown };

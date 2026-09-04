@@ -1,11 +1,11 @@
 /** The jq runtime — jq's numbers, jq's order, jq's regex flags — and the `jsjq` binary. */
-import type { RunOptions } from '#/index.js';
+import type { RunOptions, Value } from '#/index.js';
 import * as assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import * as path from 'node:path';
 import process from 'node:process';
 import { describe, it } from 'node:test';
-import { agree, agreeText, run } from './harness.js';
+import { agree, agreeText, divergent, run } from './harness.js';
 import { lib as jqLib } from '#/runtime/jq/index.js';
 import { runtime as jqRuntime } from '#/runtime/jq/runtime.js';
 import { fromjson as jqFromjson } from '#/runtime/jq/value.js';
@@ -60,6 +60,7 @@ agreeText('jq runtime: numbers keep their spelling', [
 	[ '.', '-Infinity' ],
 	// The prelude's definitions run under jq's numbers and order
 	[ 'map_values(.), (.a | abs)', '{"a": -1.500}' ],
+	[ 'min, max, min_by(.), max_by(.)', '[3.00, 1.000, 2.0]' ],
 	[ '[.[] | abs]', '[-2.000, 1.10e1]' ],
 ], jqOptions, jqFromjson);
 
@@ -93,3 +94,54 @@ describe('cli', () => {
 		assert.equal(cli([ '-n', '-e', '1' ]).status, 0);
 	});
 });
+
+agree('the extended mathematics', [
+	[ '[.[] | nearbyint, rint]', [ -1.7, 2.5, 3.5, -1.5, -2.5, 2.3 ] ],
+	[ '[.[] | exp2, exp10]', [ 0, 1, 2, 3, 0.1 ] ],
+	[ '[.[] | frexp, modf, significand, logb]', [ 7, 1, 48, 3.25, -3.25, 0.1 ] ],
+	[ '0 | logb' ],
+	[ '[drem(7; 3), drem(5; 2), remainder(5; 2), remainder(7.5; 2)]' ],
+	[ '[ldexp(3; 4), scalb(3; 4), scalbln(3; 4), ldexp(1; -3)]' ],
+	[ '[fdim(5; 3), fdim(3; 5), fmod(7; 3), fmod(-7; 3), fma(2; 3; 4)]' ],
+	[ '[copysign(3; -1), copysign(-3; 1), nextafter(1; 2), nexttoward(1; 0)]' ],
+	[ '[fmax(nan; 1), fmin(1; nan), fmax(1; 2), fmin(1; 2)]' ],
+	[ '[.[] | tgamma]', [ 7, 3 ] ],
+	[ '[.[] | gamma, lgamma]', [ 1, 3, 4 ] ],
+	[ '3 | lgamma_r' ],
+], jqOptions);
+
+divergent('a ulp astray from this libm, or refused outright', [
+	[ '[0.5, -0.5] | map(tgamma)', null, [ [ 1.7724538509055159, -3.5449077018110295 ] ] ],
+	[ '-0.5 | nearbyint', null, [ 0 ] ],
+	[ '1 | j0', null, 'error' ],
+	[ '1 | erf', null, 'error' ],
+	[ 'jn(2; 1)', null, 'error' ],
+], jqOptions);
+
+describe('the jq builtins surface', () => {
+	it('carries the extended tail', () => {
+		const [ names ] = run('builtins', null, jqOptions) as [ Value[] ];
+		assert.ok(names.includes('ldexp/2'));
+		assert.ok(names.includes('tgamma/0'));
+		assert.ok(names.includes('j0/0'));
+	});
+});
+
+agree('the C time dialect', [
+	[ 'gmtime', 1425599507 ],
+	[ 'gmtime', 1425599507.123 ],
+	[ 'gmtime | mktime', 1425599507 ],
+	[ '[2015, 2, 5, 23, 51, 47, 4, 63] | [mktime, strftime("%Y-%m-%dT%H:%M:%SZ")]' ],
+	[ '[2015, 2, 5, 23, 51, 47.5] | mktime' ],
+	[ '[2015, 2] | mktime' ],
+	[ '"x" | mktime' ],
+	[ '[2015, 2, 5, 23, 51, 47, 4, 63] | strftime("%Y %j %a %A %b %B %e %u %w %p %I %C %y %%")' ],
+	[ '[2015, 2, 5, 23, 51, 47, 4, 63] | strftime("%F %T | %D %R | %d %H %M %S %m")' ],
+	[ '1425599507 | strftime("%Y-%m-%d")' ],
+	[ '"2015-03-05T23:51:47Z" | strptime("%Y-%m-%dT%H:%M:%SZ")' ],
+	[ '"05/03/15" | strptime("%d/%m/%y")' ],
+	[ '"5 Mar 2015" | strptime("%d %b %Y")' ],
+	[ '"x" | strptime("%Y")' ],
+	[ '1425599507 | [todate, todateiso8601]' ],
+	[ '"2015-03-05T23:51:47Z" | [fromdate, fromdateiso8601]' ],
+], jqOptions);

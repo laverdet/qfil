@@ -14,7 +14,8 @@
  * `compile` takes a `lib` option, so an application may supply a library of its own.
  */
 import type { Context, Env, Lib, Path, Render, Resumed, Stream, Value, ValueObject } from '#/compiler/filter.js';
-import { add, delpaths, field, getpath, halt, has, iterate, keys, length, recursePaths, setpath } from './intrinsics.js';
+import { dates } from './date.js';
+import { add, delpaths, field, format, getpath, halt, has, isFormat, iterate, keys, length, recursePaths, setpath } from './intrinsics.js';
 import { assertArray, assertNumber, assertString, unary, withFilter, withPath } from './library.js';
 import { math } from './math.js';
 import { matching, regex } from './regex.js';
@@ -92,13 +93,65 @@ export function ordered(compareValues: (left: Value, right: Value) => number): L
 			const items = assertArray(input, 'unique');
 			return groups(items, items, compareValues).map(group => group[0]!);
 		}),
+		unique_by: withFilter(filter => (input, env) => {
+			const items = assertArray(input, 'unique_by');
+			return groups(items, keysBy(items, filter, env), compareKeys).map(group => group[0]!);
+		}),
+		// The first of equal least elements, and the last of equal greatest, as jq picks them
+		min: unary(input => least(assertArray(input, 'min'), assertArray(input, 'min'), compareValues)),
+		max: unary(input => greatest(assertArray(input, 'max'), assertArray(input, 'max'), compareValues)),
+		min_by: withFilter(filter => (input, env) => {
+			const items = assertArray(input, 'min_by');
+			return least(items, keysBy(items, filter, env), compareKeys);
+		}),
+		max_by: withFilter(filter => (input, env) => {
+			const items = assertArray(input, 'max_by');
+			return greatest(items, keysBy(items, filter, env), compareKeys);
+		}),
+		bsearch: (render, target) => values(render, [ target ], (input, value) => {
+			const items = assertArray(input, 'bsearch');
+			let lo = 0;
+			let hi = items.length;
+			while (lo < hi) {
+				const mid = (lo + hi) >> 1;
+				const order = compareValues(items[mid]!, value);
+				if (order === 0) {
+					return mid;
+				} else if (order < 0) {
+					lo = mid + 1;
+				} else {
+					hi = mid;
+				}
+			}
+			return -lo - 1;
+		}),
 	};
+
+	function least(items: Value[], keys: Value[], by: Comparison): Value {
+		let found: number | null = null;
+		for (let ii = 0; ii < items.length; ++ii) {
+			if (found === null || by(keys[ii]!, keys[found]!) < 0) {
+				found = ii;
+			}
+		}
+		return found === null ? null : items[found]!;
+	}
+
+	function greatest(items: Value[], keys: Value[], by: Comparison): Value {
+		let found: number | null = null;
+		for (let ii = 0; ii < items.length; ++ii) {
+			if (found === null || by(keys[ii]!, keys[found]!) >= 0) {
+				found = ii;
+			}
+		}
+		return found === null ? null : items[found]!;
+	}
 }
 
-function flatten(value: Value): Value[] {
+function flatten(value: Value, depth: number): Value[] {
 	const result: Value[] = [];
 	for (const element of assertArray(value, 'flatten')) {
-		result.push(...Array.isArray(element) ? flatten(element) : [ element ]);
+		result.push(...Array.isArray(element) && depth > 0 ? flatten(element, depth - 1) : [ element ]);
 	}
 	return result;
 }
@@ -490,7 +543,51 @@ export const lib: Lib = {
 	last: unary(input => assertArray(input, 'last').at(-1) ?? null),
 	...ordered(compare),
 	reverse: unary(input => input === null ? [] : [ ...assertArray(input, 'reverse') ].reverse()),
-	flatten: unary(flatten),
+	flatten: overload(
+		unary(input => flatten(input, Infinity)),
+		(render, depth) => values(render, [ depth ], (input, deep) => {
+			const levels = assertNumber(deep, 'flatten');
+			if (levels < 0) {
+				throw new JqError('flatten depth must not be negative');
+			}
+			return flatten(input, levels);
+		}),
+	),
+	keys_unsorted: unary(input => {
+		if (Array.isArray(input)) {
+			return input.map((_element, ii) => ii);
+		} else if (isObject(input)) {
+			return Object.keys(input);
+		}
+		throw new JqError(`${describe(input)} has no keys`);
+	}),
+	format: (render, name) => values(render, [ name ], (input, value) => {
+		const spec = assertString(value, 'format');
+		if (!isFormat(spec)) {
+			throw new JqError(`${spec} is not a valid format`);
+		}
+		return format(spec, input);
+	}),
+	builtins(this: Context, _render: Render) {
+		return () => this.builtins();
+	},
+	input_filename: _render => () => null,
+	input_line_number: _render => () => 0,
+	have_decnum: _render => () => false,
+	have_literal_numbers: _render => () => false,
+	get_jq_origin: unary(() => {
+		throw new JqError('qfil has no module system');
+	}),
+	get_prog_origin: unary(() => {
+		throw new JqError('qfil has no module system');
+	}),
+	get_search_list: unary(() => {
+		throw new JqError('qfil has no module system');
+	}),
+	modulemeta: unary(() => {
+		throw new JqError('qfil has no module system');
+	}),
+	...dates,
 	...strings,
 	...matching(regex),
 	...math,

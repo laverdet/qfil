@@ -161,6 +161,31 @@ export function equal(left: Value, right: Value): boolean {
 }
 
 /**
+ * Deep containment, as jq has it: a string contains its substrings, an array whatever each of the
+ * other's elements is contained by one of its own, an object by key, and a scalar what it equals.
+ * Kinds that cannot hold one another refuse at the top; inside a container a mismatch is simply
+ * not contained.
+ */
+export function contains(left: Value, right: Value): boolean {
+	if (typeOf(left) !== typeOf(right)) {
+		throw new JqError(`${describe(left)} and ${describe(right)} cannot have their containment checked`);
+	}
+	return containedIn(left, right);
+}
+
+function containedIn(left: Value, right: Value): boolean {
+	if (typeof left === 'string' && typeof right === 'string') {
+		return left.includes(right);
+	} else if (Array.isArray(left) && Array.isArray(right)) {
+		return right.every(element => left.some(item => containedIn(item, element)));
+	} else if (isObject(left) && isObject(right)) {
+		return Object.keys(right).every(key => Object.hasOwn(left, key) && containedIn(left[key]!, right[key]!));
+	} else {
+		return equal(left, right);
+	}
+}
+
+/**
  * Objects this language makes have no prototype, so every key — `__proto__` included — is an
  * ordinary own property that plain assignment sets. Input may still carry `Object.prototype`, which
  * is why reads go through `Object.hasOwn`.

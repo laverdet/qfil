@@ -487,9 +487,54 @@ export function keysOfOptional(value: Value): (number | string)[] {
 }
 
 /** `@name` string formats. */
+/** A cell of a `@csv` or `@tsv` row: a scalar, written by `write`; a container refuses. */
+function cell(value: Value, what: string, write: (text: string) => string): string {
+	if (value === null) {
+		return '';
+	} else if (typeof value === 'string') {
+		return write(value);
+	} else if (typeof value === 'object' && !(value instanceof Number)) {
+		throw new JqError(`${describe(value)} is not valid in a ${what} row`);
+	} else {
+		return tostring(value);
+	}
+}
+
+/** A `@csv` or `@tsv` row: the input must be an array. */
+function row(value: Value, what: string, separator: string, write: (text: string) => string): string {
+	if (!Array.isArray(value)) {
+		throw new JqError(`${describe(value)} cannot be ${what}-formatted, only an array can be`);
+	}
+	return value.map(element => cell(element, what, write)).join(separator);
+}
+
+/** A `@sh` word: a string is single-quoted; a scalar stands as written; a container refuses. */
+function shWord(value: Value): string {
+	if (typeof value === 'string') {
+		return `'${value.replace(/'/g, "'\\''")}'`;
+	} else if (typeof value === 'object' && value !== null && !(value instanceof Number)) {
+		throw new JqError(`${describe(value)} can not be escaped for shell`);
+	} else {
+		return tostring(value);
+	}
+}
+
 const formats: Readonly<Record<string, (value: Value) => string>> = {
 	text: tostring,
 	json: value => tojson(value),
+	html: value => tostring(value).replace(/[<>&'"]/g, char => {
+		switch (char) {
+			case '<': return '&lt;';
+			case '>': return '&gt;';
+			case '&': return '&amp;';
+			case "'": return '&apos;';
+			default: return '&quot;';
+		}
+	}),
+	uri: value => encodeURIComponent(tostring(value)).replace(/[!'()*]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`),
+	csv: value => row(value, 'csv', ',', text => `"${text.replace(/"/g, '""')}"`),
+	tsv: value => row(value, 'tsv', '\t', text => text.replace(/\\/g, '\\\\').replace(/\t/g, '\\t').replace(/\n/g, '\\n').replace(/\r/g, '\\r')),
+	sh: value => Array.isArray(value) ? value.map(shWord).join(' ') : shWord(value),
 	base64: value => Buffer.from(tostring(value), 'utf8').toString('base64'),
 	base64d: value => Buffer.from(tostring(value), 'base64').toString('utf8'),
 };
