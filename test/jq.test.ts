@@ -1,7 +1,7 @@
 /** The jq runtime — jq's numbers, jq's order, jq's regex flags — and the `jsjq` binary. */
 import type { Value } from '#/index.js';
 import * as assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import * as path from 'node:path';
 import process from 'node:process';
 import { describe, it } from 'node:test';
@@ -83,6 +83,27 @@ describe('cli', () => {
 		assert.equal(cli([ '-j', '.[]' ], '["a","b"]').stdout, 'ab');
 		assert.equal(cli([ '-c', '., (. + 0)' ], '1.000').stdout, '1.000\n1\n');
 		assert.equal(cli([ '--runtime', 'js', '-c', '.' ], '1.000').stdout, '1\n');
+	});
+	it('reads concatenated values under jq, and JSON Lines under js', () => {
+		assert.deepEqual(cli([ '-c', '.' ], '"foo""bar"'), { status: 0, stdout: '"foo"\n"bar"\n', stderr: '' });
+		assert.equal(cli([ '-c', '.' ], '{"a":1}{"a":2}[3]4"x"').stdout, '{"a":1}\n{"a":2}\n[3]\n4\n"x"\n');
+		assert.equal(cli([ '--runtime', 'js', '-c', '.a' ], '{"a":1}\n\n{"a":2}').stdout, '1\n2\n');
+		assert.equal(cli([ '--runtime', 'js', '.' ], '"foo""bar"').status, 5);
+	});
+	it('yields each output before the input ends', async () => {
+		const child = spawn(process.execPath, [ path.join(import.meta.dirname, '..', 'bin', 'jsjq.js'), '-c', '.' ], { stdio: [ 'pipe', 'pipe', 'inherit' ] });
+		const readOut = () => new Promise<string>(resolve => {
+			child.stdout.once('data', chunk => resolve(String(chunk)));
+		});
+		child.stdin.write('"first"');
+		assert.equal(await readOut(), '"first"\n');
+		child.stdin.write('{"half":');
+		child.stdin.write('1}');
+		assert.equal(await readOut(), '{"half":1}\n');
+		child.stdin.end();
+		await new Promise(resolve => {
+			child.once('close', resolve);
+		});
 	});
 	it('exits as jq does', () => {
 		assert.equal(cli([ '-n', '1 +' ]).status, 3);

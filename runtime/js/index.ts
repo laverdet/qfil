@@ -23,6 +23,14 @@ import { strings } from './strings.js';
 import { JqError, compare, describe, fromjson, isNumber, isObject, newObject, tojson, tonumber, tostring, truthy, typeOf } from './value.js';
 import { Await, each, feed, firstOf, forward, isTask, overload, runtimePathFunction, streams, task, values } from '#/compiler/filter.js';
 
+/** The pulled input, or the language's error past the last one. */
+function pulled(next: IteratorResult<Value>): Value {
+	if (next.done === true) {
+		throw new JqError('No more inputs');
+	}
+	return next.value;
+}
+
 /** A stream drawn from outside the program, as `inputs` is. */
 function fromIterable(source: () => Iterable<Value>): Stream {
 	return function*() {
@@ -521,10 +529,32 @@ export const lib: Lib = {
 		}),
 	),
 	input(this: Context, _render: Render) {
-		return () => this.input();
+		const { inputs } = this;
+		if (inputs.awaits) {
+			return task(function*(): Generator<Value, void, Resumed> {
+				const next = yield new Await(inputs.iterator.next() as unknown as Promise<Value>) as unknown as Value;
+				yield pulled(next as unknown as IteratorResult<Value>);
+			});
+		} else {
+			return () => pulled(inputs.iterator.next());
+		}
 	},
 	inputs(this: Context, _render: Render) {
-		return fromIterable(() => this.inputs());
+		const { inputs } = this;
+		if (inputs.awaits) {
+			return task(function*(): Generator<Value, void, Resumed> {
+				while (true) {
+					const next = yield new Await(inputs.iterator.next() as unknown as Promise<Value>) as unknown as Value;
+					const result = next as unknown as IteratorResult<Value>;
+					if (result.done === true) {
+						return;
+					}
+					yield result.value;
+				}
+			});
+		} else {
+			return fromIterable(() => ({ [Symbol.iterator]: () => inputs.iterator }));
+		}
 	},
 	debug(this: Context, _render: Render) {
 		return (input: Value) => {

@@ -23,7 +23,7 @@ export interface Command {
 	/** A parsed command line, as what a run needs: the runtime and library, and the inputs. */
 	readonly session: (flags: Flags, files: readonly string[]) => {
 		readonly options: Pick<RunOptions, 'lib' | 'runtime'>;
-		readonly inputs: Iterable<Value>;
+		readonly inputs: Iterable<Value> | AsyncIterable<Value>;
 	};
 }
 
@@ -100,8 +100,17 @@ async function main(command: Command, argv: readonly string[]): Promise<number> 
 		return 2;
 	}
 	const { options, inputs } = command.session(flags, files);
-	const remaining = inputs[Symbol.iterator]();
-	const filter = compile(source, { ...options, args, inputs: { [Symbol.iterator]: () => remaining } });
+	// One iterator, shared between the run loop below and what `input` and `inputs` read
+	const shared = function(): Iterable<Value> | AsyncIterable<Value> {
+		if (Symbol.asyncIterator in inputs) {
+			const remaining = inputs[Symbol.asyncIterator]();
+			return { [Symbol.asyncIterator]: () => remaining };
+		} else {
+			const remaining = inputs[Symbol.iterator]();
+			return { [Symbol.iterator]: () => remaining };
+		}
+	}();
+	const filter = compile(source, { ...options, args, inputs: shared });
 	const indent = function() {
 		if (flags.tab === true) {
 			return '\t';
@@ -135,7 +144,7 @@ async function main(command: Command, argv: readonly string[]): Promise<number> 
 	if (flags['null-input'] === true) {
 		await run(null);
 	} else {
-		for (const input of { [Symbol.iterator]: () => remaining }) {
+		for await (const input of shared) {
 			await run(input);
 		}
 	}

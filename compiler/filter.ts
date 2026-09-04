@@ -104,10 +104,14 @@ export interface Runtime extends Handlers {
 export interface Context {
 	readonly args: Readonly<Record<string, Value>>;
 	readonly env: Readonly<Record<string, string>>;
-	/** The next input, for `input`; throws when there are none left. */
-	readonly input: () => Value;
-	/** Every remaining input, for `inputs`. */
-	readonly inputs: () => Iterable<Value>;
+	/**
+	 * Every remaining input, shared by `input` and `inputs`: one iterator, pulled as either asks.
+	 * When the consumer's inputs are asynchronous each pull is a promise, `awaits` says so, and
+	 * the library's filters reading them are tasks.
+	 */
+	readonly inputs:
+		{ readonly awaits: false; readonly iterator: Iterator<Value> } |
+		{ readonly awaits: true; readonly iterator: AsyncIterator<Value> };
 	readonly debug: (value: Value) => void;
 	readonly stderr: (value: Value) => void;
 	/** Every name the library and the prelude define, as `name/arity`, for `builtins`. */

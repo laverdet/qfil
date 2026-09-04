@@ -195,6 +195,12 @@ bodies run beyond the one whose turn it is, so a consumer that stops early leave
 source unread. What a body ahead of its turn does, it does ahead of where a serial run would have
 it — the promises it starts, the inputs it reads — which is the point.
 
+Inputs may arrive asynchronously: `RunOptions.inputs` takes an `AsyncIterable` as readily as an
+`Iterable`, and `input` and `inputs` are then tasks — a program reading them awaits, one that
+never asks keeps its sync shape. The `jsjq` binary reads standard input this way, streaming: the
+jq flavour scans concatenated JSON values cumulatively and yields each as its text completes, the
+JavaScript flavour reads JSON Lines, and `-R` reads lines; nothing waits for the input to end.
+
 ### The prelude
 
 Builtins that the language can define are defined in the language: `Runtime.prelude` is a

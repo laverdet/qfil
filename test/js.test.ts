@@ -341,6 +341,21 @@ describe('filters that await', () => {
 	});
 });
 
+describe('asynchronous inputs', () => {
+	const feed = () => async function*(): AsyncIterable<Value> {
+		await Promise.resolve();
+		yield* [ 1, 2, 3 ];
+	}();
+	it('compiles input and inputs as tasks', () => {
+		assert.equal(compile('.', { inputs: feed() }).awaits, false);
+		assert.equal(compile('inputs', { inputs: feed() }).awaits, true);
+	});
+	it('reads them as they settle', async () => {
+		assert.deepEqual(await run('[input, inputs]', null, { inputs: feed() }), [ [ 1, 2, 3 ] ]);
+		assert.deepEqual(await run('try input catch "dry"', null, { inputs: async function*(): AsyncIterable<Value> { await Promise.resolve(); yield* []; }() }), [ 'dry' ]);
+	});
+});
+
 /** Tail calls: a recursive call in tail position runs on one frame, not the JavaScript stack. */
 describe('tail calls', () => {
 	const results = (filter: string, input: Value = null): Value[] => run(filter, input) as Value[];

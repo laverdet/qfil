@@ -13,7 +13,7 @@ import * as process from 'node:process';
 import { instantiate } from './compiler/compiler.js';
 import { arities } from './compiler/filter.js';
 import { parse } from './compiler/parser.js';
-import { JqError, tojson } from './runtime/js/value.js';
+import { tojson } from './runtime/js/value.js';
 
 export type { Context, Env, Filter as LibFilter, Handled, Handler, Lib, LibFunction, Path, PathFilter, Render, Runtime, Stream, Value, ValueObject } from './compiler/filter.js';
 export { Await, Bounce, Break, CompileError, Tail, abreast, combine, combineStreams, constant, driven, each, feed, generator, isStream, isTask, once, over, overload, pathForm, promises, runtimePathFunction, settle, streams, task, unrolled, values } from './compiler/filter.js';
@@ -27,8 +27,8 @@ export interface RunOptions {
 	readonly runtime: Runtime;
 	/** Named arguments, available as `$name`. */
 	readonly args?: Readonly<Record<string, Value>>;
-	/** Further inputs for `input` and `inputs`; none by default. */
-	readonly inputs?: Iterable<Value>;
+	/** Further inputs for `input` and `inputs`; none by default. Asynchronous inputs make the filters reading them await. */
+	readonly inputs?: Iterable<Value> | AsyncIterable<Value>;
 	readonly env?: Readonly<Record<string, string>>;
 	readonly debug?: (value: Value) => void;
 	readonly stderr?: (value: Value) => void;
@@ -57,19 +57,19 @@ export interface TaskFilter {
 export type Filter = SingleFilter | StreamFilter | TaskFilter;
 
 function createContext(options: RunOptions): Context {
-	const inputs = (options.inputs ?? [])[Symbol.iterator]();
+	const inputs = function(): Context['inputs'] {
+		const source = options.inputs ?? [];
+		if (Symbol.asyncIterator in source) {
+			return { awaits: true, iterator: source[Symbol.asyncIterator]() };
+		} else {
+			return { awaits: false, iterator: source[Symbol.iterator]() };
+		}
+	}();
 	const env = options.env ?? process.env as Record<string, string>;
 	return {
 		args: options.args ?? {},
 		env,
-		input: () => {
-			const next = inputs.next();
-			if (next.done === true) {
-				throw new JqError('No more inputs');
-			}
-			return next.value;
-		},
-		inputs: () => ({ [Symbol.iterator]: () => inputs }),
+		inputs,
 		debug: options.debug ?? (value => {
 			process.stderr.write(`${tojson([ 'DEBUG:', value ])}\n`);
 		}),
