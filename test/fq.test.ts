@@ -7,10 +7,13 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import process from 'node:process';
 import { after, describe, it } from 'node:test';
-import { run } from './harness.js';
+import { differential } from './harness.js';
 import { JqError } from '#/index.js';
 import { runtime as fsRuntime } from '#/runtime/fs/runtime.js';
 import { entry } from '#/runtime/fs/value.js';
+import { lib } from '#/runtime/js/index.js';
+
+const { run } = differential({ runtime: fsRuntime, lib });
 
 /** The filesystem runtime, over a fixture tree with pinned sizes and mtimes. */
 describe('the filesystem runtime', () => {
@@ -27,7 +30,7 @@ describe('the filesystem runtime', () => {
 	after(() => {
 		fs.rmSync(root, { recursive: true, force: true });
 	});
-	const query = (filter: string): Value[] => run(filter, entry(root), { runtime: fsRuntime }) as Value[];
+	const query = (filter: string): Value[] => run(filter, entry(root)) as Value[];
 
 	it('sums the sizes in a directory', () => {
 		assert.deepEqual(query('[.[] | select(.type == "file") | .size] | add'), [ 8 ]);
@@ -48,8 +51,8 @@ describe('the filesystem runtime', () => {
 		assert.deepEqual(query('[.[]? | .name] | length'), [ 3 ]);
 	});
 	it('leaves plain data its JavaScript meaning', () => {
-		assert.deepEqual(run('{a: 1, b: 2} | [.[]]', null, { runtime: fsRuntime }), [ [ 1, 2 ] ]);
-		assert.deepEqual(run('[{a: 1} | ..] | length', null, { runtime: fsRuntime }), [ 2 ]);
+		assert.deepEqual(run('{a: 1, b: 2} | [.[]]', null), [ [ 1, 2 ] ]);
+		assert.deepEqual(run('[{a: 1} | ..] | length', null), [ 2 ]);
 	});
 	it('raises a missing path as the language\'s own error', () => {
 		assert.throws(() => entry(path.join(root, 'nope')), JqError);

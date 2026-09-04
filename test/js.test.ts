@@ -1,11 +1,17 @@
-/** The package as a JavaScript library: the compiled shape, doubles, filters that await, tail calls. */
+/**
+ * The JavaScript flavour, and the package as a JavaScript library: doubles, UTF-16 strings,
+ * JavaScript's order and regex; the compiled shape, filters that await, tail calls.
+ */
 import type { Lib, Value } from '#/index.js';
 import * as assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
-import { compile, run } from './harness.js';
+import { differential } from './harness.js';
 import { CompileError, JqError, constant, overload, promises, values } from '#/index.js';
 import { lib } from '#/runtime/js/index.js';
+import { runtime } from '#/runtime/js/runtime.js';
 import { tojson } from '#/runtime/js/value.js';
+
+const { compile, divergent, run } = differential({ runtime, lib });
 
 describe('number formatting', () => {
 	// JavaScript's shortest round-trip formatting; jq preserves literals and formats doubles its own way
@@ -14,6 +20,28 @@ describe('number formatting', () => {
 		assert.deepEqual(run('[.[] | tostring]', [ 1.0, 1.5, 1e100 ]), [ [ '1', '1.5', '1e+100' ] ]);
 	});
 });
+
+divergent('strings are UTF-16', [
+	// jq counts, slices and sorts by code point; these use JavaScript's code units
+	[ 'length, .[0:1], ([., "\uffff"] | sort)', '😀', [ 2, '\ud83d', [ '😀', '\uffff' ] ] ],
+]);
+
+divergent('order is JavaScript\'s', [
+	// Strings order among themselves; anything else subtracts, which is NaN for a container. jq's
+	// total order is the jq runtime's, and agrees with the binary in jq.test.ts
+	[ '[(null < false), ([] < {}), (true < 0), (1 < "2"), (false < true)]', null, [ [ false, false, false, true, true ] ] ],
+	[ 'sort', [ { b: 1 }, { a: 2 } ], [ [ { b: 1 }, { a: 2 } ] ] ],
+	[ 'sort', [ 3, '2', 10 ], [ [ '2', 3, 10 ] ] ],
+]);
+
+divergent('regular expressions are JavaScript\'s', [
+	// Flags are JavaScript's here — the jq runtime reads jq's own — so `s` is dot-all and
+	// Oniguruma's `x`, `n`, `l`, `p` do not exist
+	[ 'test("a.b";"s")', 'a\nb', [ true ] ],
+	[ 'test("a";"x")', 'a', 'error' ],
+	// Offsets and lengths count UTF-16 code units
+	[ '[match("😀a"; "g") | .offset, .length]', 'x😀a😀a', [ [ 1, 3, 4, 3 ] ] ],
+]);
 
 describe('compiled shape', () => {
 	it('is a plain function for a single-valued filter', () => {
@@ -342,5 +370,35 @@ describe('tail calls', () => {
 	});
 	it('leaves non-tail recursion alone', () => {
 		assert.deepEqual(results('def fib: if . < 2 then . else (. - 1 | fib) + (. - 2 | fib) end; fib', 15), [ 610 ]);
+	});
+});
+
+divergent('what only the binary can say', [
+	[ 'have_decnum', null, [ false ] ],
+	[ 'have_literal_numbers', null, [ false ] ],
+	[ 'input_line_number', null, [ 0 ] ],
+	[ 'get_search_list', null, 'error' ],
+	[ 'modulemeta', 'x', 'error' ],
+	[ '1 | j0', null, 'error' ],
+	// A ulp astray from this machine's libm, or a -0 the JSON printer cannot spell
+	[ '27 | cbrt', null, [ 3 ] ],
+	[ '0.5 | atanh', null, [ 0.5493061443340548 ] ],
+	[ '2 | acosh', null, [ 1.3169578969248166 ] ],
+	[ 'input_filename', null, [ null ] ],
+	// `todate` and `fromdate` speak ISO through `Date`: milliseconds written, fractions read
+	[ '1425599507 | todate', null, [ '2015-03-05T23:51:47.000Z' ] ],
+	[ '"2015-03-05T23:51:47.5Z" | fromdate', null, [ 1425599507.5 ] ],
+	[ '1 | todateiso8601', null, 'error' ],
+	[ '1 | erf', null, 'error' ],
+	[ 'jn(2; 1)', null, 'error' ],
+]);
+
+describe('builtins', () => {
+	it('lists the library and the prelude', () => {
+		const [ names ] = run('builtins', null) as [ Value[] ];
+		assert.ok(names.length > 150);
+		assert.ok(names.includes('length/0'));
+		assert.ok(names.includes('map_values/1'));
+		assert.ok(names.includes('atan2/2'));
 	});
 });

@@ -1,8 +1,9 @@
 /** The language, case by case against the `jq` binary — with the departures `divergent` documents. */
-import type { Value } from '#/index.js';
-import * as assert from 'node:assert/strict';
-import { describe, it } from 'node:test';
-import { agree, divergent, run } from './harness.js';
+import { differential } from './harness.js';
+import { lib } from '#/runtime/js/index.js';
+import { runtime } from '#/runtime/js/runtime.js';
+
+const { agree, divergent } = differential({ runtime, lib });
 
 agree('paths and literals', [
 	[ '.', { a: 1 } ],
@@ -415,20 +416,6 @@ agree('builtins', [
 	[ 'strptime("%Y")', 'abc' ],
 ]);
 
-divergent('regular expressions are JavaScript\'s', [
-	// Flags are JavaScript's here — the jq runtime reads jq's own — so `s` is dot-all and
-	// Oniguruma's `x`, `n`, `l`, `p` do not exist
-	[ 'test("a.b";"s")', 'a\nb', [ true ] ],
-	[ 'test("a";"x")', 'a', 'error' ],
-	// Offsets and lengths count UTF-16 code units
-	[ '[match("😀a"; "g") | .offset, .length]', 'x😀a😀a', [ [ 1, 3, 4, 3 ] ] ],
-]);
-
-divergent('strings are UTF-16', [
-	// jq counts, slices and sorts by code point; these use JavaScript's code units
-	[ 'length, .[0:1], ([., "\uffff"] | sort)', '😀', [ 2, '\ud83d', [ '😀', '\uffff' ] ] ],
-]);
-
 divergent('jq 1.8 quirks not followed', [
 	// jq 1.8.2's `repeat` yields `f` of the same input forever; the documented definition is kept
 	[ '[limit(5; repeat(. * 2))]', 1, [ [ 1, 2, 4, 8, 16 ] ] ],
@@ -449,14 +436,6 @@ divergent('jq 1.8 quirks not followed', [
 	// When a later `?//` pattern is tried inside a fold, jq 1.8.2 loses the state accumulated so far
 	// (it yields 1, 3, 3); the state before the failed update is kept
 	[ '[foreach ([1],2,{"a":3}) as [$a] ?// $a ?// {a: $a} (0; . + $a)]', null, [ [ 1, 3, 6 ] ] ],
-]);
-
-divergent('order is JavaScript\'s', [
-	// Strings order among themselves; anything else subtracts, which is NaN for a container. jq's
-	// total order is the jq runtime's, below
-	[ '[(null < false), ([] < {}), (true < 0), (1 < "2"), (false < true)]', null, [ [ false, false, false, true, true ] ] ],
-	[ 'sort', [ { b: 1 }, { a: 2 } ], [ [ { b: 1 }, { a: 2 } ] ] ],
-	[ 'sort', [ 3, '10', 2 ], [ [ 2, 3, '10' ] ] ],
 ]);
 
 agree('the prelude: builtins defined in the language', [
@@ -632,33 +611,3 @@ agree('the odds and ends', [
 	[ 'null | [JOIN({a: 5}; ({k: "a"}, {k: "b"}); .k)]' ],
 	[ 'null | [JOIN({a: 5}; ({k: "a"}, {k: "b"}); .k; [.[0].k, .[1]])]' ],
 ]);
-
-divergent('what only the binary can say', [
-	[ 'have_decnum', null, [ false ] ],
-	[ 'have_literal_numbers', null, [ false ] ],
-	[ 'input_line_number', null, [ 0 ] ],
-	[ 'get_search_list', null, 'error' ],
-	[ 'modulemeta', 'x', 'error' ],
-	[ '1 | j0', null, 'error' ],
-	// A ulp astray from this machine's libm, or a -0 the JSON printer cannot spell
-	[ '27 | cbrt', null, [ 3 ] ],
-	[ '0.5 | atanh', null, [ 0.5493061443340548 ] ],
-	[ '2 | acosh', null, [ 1.3169578969248166 ] ],
-	[ 'input_filename', null, [ null ] ],
-	// `todate` and `fromdate` speak ISO through `Date`: milliseconds written, fractions read
-	[ '1425599507 | todate', null, [ '2015-03-05T23:51:47.000Z' ] ],
-	[ '"2015-03-05T23:51:47.5Z" | fromdate', null, [ 1425599507.5 ] ],
-	[ '1 | todateiso8601', null, 'error' ],
-	[ '1 | erf', null, 'error' ],
-	[ 'jn(2; 1)', null, 'error' ],
-]);
-
-void describe('builtins', () => {
-	it('lists the library and the prelude', () => {
-		const [ names ] = run('builtins', null) as [ Value[] ];
-		assert.ok(names.length > 150);
-		assert.ok(names.includes('length/0'));
-		assert.ok(names.includes('map_values/1'));
-		assert.ok(names.includes('atan2/2'));
-	});
-});

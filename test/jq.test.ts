@@ -1,16 +1,16 @@
 /** The jq runtime — jq's numbers, jq's order, jq's regex flags — and the `jsjq` binary. */
-import type { RunOptions, Value } from '#/index.js';
+import type { Value } from '#/index.js';
 import * as assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import * as path from 'node:path';
 import process from 'node:process';
 import { describe, it } from 'node:test';
-import { agree, agreeText, divergent, run } from './harness.js';
+import { differential } from './harness.js';
 import { lib as jqLib } from '#/runtime/jq/index.js';
 import { runtime as jqRuntime } from '#/runtime/jq/runtime.js';
 import { fromjson as jqFromjson } from '#/runtime/jq/value.js';
 
-const jqOptions: RunOptions = { runtime: jqRuntime, lib: jqLib };
+const { agree, agreeText, divergent, run } = differential({ runtime: jqRuntime, lib: jqLib }, jqFromjson);
 
 agree('jq runtime: jq\'s order', [
 	[ '([] < {}), (null < false), (true < 0), (1 < "a"), ({} > []), ([1] < [1, 0])' ],
@@ -19,7 +19,7 @@ agree('jq runtime: jq\'s order', [
 	[ 'sort', [ [ 1, 2 ], [ 1 ], [ 0, 5 ], [] ] ],
 	[ 'unique, group_by(type)', [ 1, [ 1 ], { a: 1 }, '1', null, 1, true ] ],
 	[ 'sort_by(.a)', [ { a: [ 1 ] }, { a: 'x' }, { a: null }, { a: {} } ] ],
-], jqOptions);
+]);
 
 agree('jq runtime: jq\'s regex flags', [
 	// `x` ignores whitespace and comments outside a class; an escaped space is a space
@@ -32,11 +32,11 @@ agree('jq runtime: jq\'s regex flags', [
 	[ '[match("a*"; "gn") | .offset], (match("a*"; "n") | .offset), test("a*"; "n"), split("a*"; "n")', 'bab' ],
 	[ 'test("a*"; "n")', 'b' ],
 	[ 'test("a"; "q")' ],
-], jqOptions);
+]);
 
 describe('jq runtime: what JavaScript cannot match', () => {
 	it('refuses the longest-match flag', () => {
-		assert.throws(() => run('match("a|aa"; "l")', 'aaa', jqOptions), { name: 'JqError', message: 'l (longest match) is not supported' });
+		assert.throws(() => run('match("a|aa"; "l")', 'aaa'), { name: 'JqError', message: 'l (longest match) is not supported' });
 	});
 });
 
@@ -62,7 +62,7 @@ agreeText('jq runtime: numbers keep their spelling', [
 	[ 'map_values(.), (.a | abs)', '{"a": -1.500}' ],
 	[ 'min, max, min_by(.), max_by(.)', '[3.00, 1.000, 2.0]' ],
 	[ '[.[] | abs]', '[-2.000, 1.10e1]' ],
-], jqOptions, jqFromjson);
+]);
 
 describe('cli', () => {
 	const cli = (args: readonly string[], input = '', bin = 'jsjq') => {
@@ -108,7 +108,7 @@ agree('the extended mathematics', [
 	[ '[.[] | tgamma]', [ 7, 3 ] ],
 	[ '[.[] | gamma, lgamma]', [ 1, 3, 4 ] ],
 	[ '3 | lgamma_r' ],
-], jqOptions);
+]);
 
 divergent('a ulp astray from this libm, or refused outright', [
 	[ '[0.5, -0.5] | map(tgamma)', null, [ [ 1.7724538509055159, -3.5449077018110295 ] ] ],
@@ -116,11 +116,11 @@ divergent('a ulp astray from this libm, or refused outright', [
 	[ '1 | j0', null, 'error' ],
 	[ '1 | erf', null, 'error' ],
 	[ 'jn(2; 1)', null, 'error' ],
-], jqOptions);
+]);
 
 describe('the jq builtins surface', () => {
 	it('carries the extended tail', () => {
-		const [ names ] = run('builtins', null, jqOptions) as [ Value[] ];
+		const [ names ] = run('builtins', null) as [ Value[] ];
 		assert.ok(names.includes('ldexp/2'));
 		assert.ok(names.includes('tgamma/0'));
 		assert.ok(names.includes('j0/0'));
@@ -144,4 +144,4 @@ agree('the C time dialect', [
 	[ '"x" | strptime("%Y")' ],
 	[ '1425599507 | [todate, todateiso8601]' ],
 	[ '"2015-03-05T23:51:47Z" | [fromdate, fromdateiso8601]' ],
-], jqOptions);
+]);
