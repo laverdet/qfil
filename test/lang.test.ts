@@ -620,3 +620,13 @@ agree('the odds and ends', [
 	[ 'null | [JOIN({a: 5}; ({k: "a"}, {k: "b"}); .k)]' ],
 	[ 'null | [JOIN({a: 5}; ({k: "a"}, {k: "b"}); .k; [.[0].k, .[1]])]' ],
 ]);
+
+agree('what jq\'s own suite taught', [
+	[ 'del(.[1], .[-6], .[2], .[-3:9])', [ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 ] ],
+	[ 'del(.[nan])', [ 1, 2, 3 ] ],
+	[ '[0, 1] | try (.[nan] = 9) catch .' ],
+	[ 'try (.[999999999] = 0) catch .' ],
+	[ '"abc" | try (. * 1000000000) catch .' ],
+	[ 'try getpath([range(10001) | 0]) catch .' ],
+	[ 'try setpath([range(10001) | 0]; 0) catch .' ],
+]);

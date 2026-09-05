@@ -8,6 +8,14 @@ import { Halt, JqError, compareStrings, copyObject, describe, equal, isNumber, i
 
 export { Halt, JqError, equal, fromjson, tojson, tonumber, tostring, truthy, typeOf } from './value.js';
 
+// V8's String::kMaxLength — 512MiB less the object header — past which the engine could not hold
+// the result either; jq's own cap raises the same complaint
+const kMaxStringLength = (512 << 20) - 24;
+
+// jq's own boundary, probed from the binary: the index past the last one `.[i] = x` accepts
+const kMaxArrayLength = (512 << 20) - 1;
+const kMaxRecursionDepth = 10000;
+
 export function error(value: Value): never {
 	throw new JqError(value);
 }
@@ -185,7 +193,15 @@ export function multiply(left: Value, right: Value): Value {
 }
 
 function repeat(text: string, count: number): Value {
-	return count < 0 || Number.isNaN(count) ? null : text.repeat(Math.floor(count));
+	if (count >= 0) {
+		if (text.length * Math.floor(count) > kMaxStringLength) {
+			throw new JqError('Repeat string result too long');
+		} else {
+			return text.repeat(Math.floor(count));
+		}
+	} else {
+		return null;
+	}
 }
 
 /** Recursive object merge: where both sides hold an object under a key, those merge too. */
@@ -244,9 +260,14 @@ export function toKey(value: Value): string {
 
 function assertPath(path: Value): Value[] {
 	if (Array.isArray(path)) {
-		return path;
+		if (path.length > kMaxRecursionDepth) {
+			throw new JqError('Path too deep');
+		} else {
+			return path;
+		}
+	} else {
+		throw new JqError('Path must be specified as an array');
 	}
-	throw new JqError('Path must be specified as an array');
 }
 
 export function getpath(value: Value, path: Value): Value {
@@ -283,9 +304,14 @@ function setKey(value: Value, key: Value, updated: Value): Value {
 	} else if (isNumber(key)) {
 		const array = value === null ? [] : [ ...value as Value[] ];
 		const whole = Math.trunc(key);
+		if (Number.isNaN(whole)) {
+			throw new JqError('Cannot set array element at NaN index');
+		}
 		const at = whole < 0 ? array.length + whole : whole;
 		if (at < 0) {
 			throw new JqError('Out of bounds negative array index');
+		} else if (at > kMaxArrayLength) {
+			throw new JqError('Array index too large');
 		}
 		while (array.length < at) {
 			array.push(null);
@@ -316,14 +342,52 @@ export function delpaths(value: Value, paths: Value): Value {
 	const sorted = paths.map(path => {
 		if (!Array.isArray(path)) {
 			throw new JqError(`Path must be specified as array, not ${typeOf(path)}`);
+		} else if (path.length > kMaxRecursionDepth) {
+			throw new JqError('Path too deep');
 		}
-		return path;
+		return resolved(value, path);
 	}).sort(comparePaths).reverse();
 	let result = value;
 	for (const path of sorted) {
 		result = deleteAt(result, path, 0);
 	}
 	return result;
+}
+
+/**
+ * A path with its negative indices and slice bounds resolved against the value as it stands now,
+ * so that sorting and deleting later paths first never re-reads a length a deletion has changed.
+ * A key its container cannot resolve passes through for deletion to refuse or ignore.
+ */
+function resolved(root: Value, path: Value[]): Value[] {
+	let current: Value = root;
+	return path.map(key => {
+		const container = current;
+		current = function() {
+			if (typeof key === 'string') {
+				return isObject(container) ? field(container, key) : null;
+			} else if (Array.isArray(container) || typeof container === 'string') {
+				return index(container, key);
+			} else {
+				return null;
+			}
+		}();
+		if (Array.isArray(container) && isNumber(key) && key < 0) {
+			const at = container.length + Math.trunc(key);
+			return at < 0 ? -Infinity : at;
+		} else if (Array.isArray(container) && isObject(key)) {
+			const resolve = (bound: Value): Value => {
+				if (isNumber(bound) && bound < 0) {
+					return Math.max(container.length + bound, 0);
+				} else {
+					return bound;
+				}
+			};
+			return { __proto__: null, start: resolve(key.start ?? null), end: resolve(key.end ?? null) };
+		} else {
+			return key;
+		}
+	});
 }
 
 /** Paths in the order deletion undoes: keys numeric, then string, then slice, each in its own order; longer paths after their prefixes. */
@@ -388,6 +452,10 @@ function deleteKey(value: Value, key: Value): Value {
 			throw new JqError(`Cannot delete field at array index of ${typeOf(value)}`);
 		}
 		const whole = Math.trunc(key);
+		if (Number.isNaN(whole)) {
+			// jq deletes nothing at a NaN index
+			return value;
+		}
 		const at = whole < 0 ? value.length + whole : whole;
 		if (at < 0 || at >= value.length) {
 			return value;
