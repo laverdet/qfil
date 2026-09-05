@@ -96,5 +96,6 @@ export const lib: Lib = {
 	trim: unary(input => assertString(input, 'trim').replace(leading, '').replace(trailing, '')),
 	tonumber: unary(tonumber),
 	have_literal_numbers: _render => () => true,
+	have_decnum: _render => () => true,
 	fromjson: unary(input => fromjson(assertString(input, 'fromjson'))),
 };

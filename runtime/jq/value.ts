@@ -87,7 +87,8 @@ function isDigit(code: number): boolean {
  * runtime makes them.
  */
 export function fromjson(text: string): Value {
-	let at = 0;
+	// A leading byte order mark is passed over, as jq's reader has it
+	let at = text.charCodeAt(0) === 0xfeff ? 1 : 0;
 	const result = parse();
 	space();
 	if (at < text.length) {

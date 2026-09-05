@@ -178,3 +178,16 @@ agree('the C time dialect', [
 	[ '1425599507 | [todate, todateiso8601]' ],
 	[ '"2015-03-05T23:51:47Z" | [fromdate, fromdateiso8601]' ],
 ]);
+
+agree('jq runtime: what its own suite taught', [
+	[ '[(infinite, -infinite) % (1, -1, infinite)]' ],
+	[ '[nan % 1, 1 % nan | isnan]' ],
+	[ '[range(3)] | [.[nan:1], .[1:nan], .[nan]]' ],
+	[ '"\\ufeff{\\"a\\":1}" | fromjson' ],
+]);
+
+divergent('spelling is decNumber\'s literal behavior', [
+	// The binary on PATH is built without decnum; the jq flavour's spelled literals behave as
+	// decNumber's do, and say so
+	[ 'have_decnum', null, [ true ] ],
+]);

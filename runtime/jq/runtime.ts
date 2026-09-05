@@ -10,7 +10,8 @@ import { prelude } from './prelude.js';
 import { Spelled, compare, spelled } from './value.js';
 import { combine } from '#/compiler/filter.js';
 import { negate as negateNumber } from '#/runtime/js/intrinsics.js';
-import { binary, runtime as js, operators } from '#/runtime/js/runtime.js';
+import { binary, runtime as js, operators, sliceOver } from '#/runtime/js/runtime.js';
+import { JqError, describe, isNumber } from '#/runtime/js/value.js';
 
 /** A literal's value: a number keeps how it was written. */
 function literal(node: ast.Literal): Value {
@@ -27,6 +28,41 @@ function negate(value: Value): Value {
 	}
 }
 
+/** A slice bound as jq reads it: NaN is no bound at all, as null is. */
+function unbounded(value: Value): Value {
+	return isNumber(value) && Number.isNaN(Number(value)) ? null : value;
+}
+
+// C's intmax_t range, which `%` casts its operands through: [-2^63, 2^63). The top, 2^63 - 1,
+// has no double spelling, so the clamp steps back inside in BigInt.
+const kIntmaxBound = 2 ** 63;
+
+/** An operand of `%`, through C's cast to intmax: truncated, the infinities clamped to the range's ends. */
+function intmax(value: number): bigint {
+	const whole = Math.trunc(value);
+	if (whole >= kIntmaxBound) {
+		return BigInt(kIntmaxBound) - 1n;
+	} else if (whole <= -kIntmaxBound) {
+		return BigInt(-kIntmaxBound);
+	} else {
+		return BigInt(whole);
+	}
+}
+
+/** jq's `%`: C's integer remainder over intmax casts, so an infinite operand clamps rather than poisons. */
+function modulo(left: Value, right: Value): Value {
+	if (!isNumber(left) || !isNumber(right)) {
+		throw new JqError(`${describe(left)} and ${describe(right)} cannot be divided (remainder)`);
+	} else if (Number.isNaN(Number(left)) || Number.isNaN(Number(right))) {
+		return NaN;
+	}
+	const divisor = intmax(right);
+	if (divisor === 0n) {
+		throw new JqError(`${describe(left)} and ${describe(right)} cannot be divided (remainder) because the divisor is zero`);
+	}
+	return Number(intmax(left) % divisor);
+}
+
 export const runtime: Runtime = {
 	...js,
 	prelude,
@@ -39,5 +75,6 @@ export const runtime: Runtime = {
 	negate: {
 		value: (node, render) => combine([ render.filter(node.operand) ], ([ value ]) => negate(value!)),
 	},
-	binary: binary(operators(compare)),
+	binary: binary({ ...operators(compare), '%': modulo }),
+	slice: sliceOver(unbounded),
 };

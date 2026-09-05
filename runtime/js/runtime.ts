@@ -82,6 +82,50 @@ function formatter(name: string): (value: Value) => string {
 	return value => intrinsics.format(name, value);
 }
 
+/** The slice handler over a reading of its bounds — identity here; the jq runtime reads NaN as no bound at all. */
+export function sliceOver(bound: (value: Value) => Value): Handler<ast.Slice> {
+	return {
+		// `from` varies slowest, then `to`, then the target, as jq has it
+		value: (node, render) => combine(
+			[
+				render.filter(node.target),
+				render.filter(node.to ?? nullLiteral),
+				render.filter(node.from ?? nullLiteral),
+			],
+			([ value, to, from ]) => intrinsics.slice(value!, bound(from!), bound(to!)),
+			'last',
+		),
+		path: (node, render) => {
+			const bounds = combineStreams([
+				render.filter(node.to ?? nullLiteral),
+				render.filter(node.from ?? nullLiteral),
+			], function*([ to, from ]) {
+				yield { __proto__: null, start: bound(from!), end: bound(to!) };
+			}, 'last');
+			const targets = render.path(node.target);
+			if (isTask(bounds) || isTask(targets)) {
+				return task(function*(path, value, env) {
+					yield* each(bounds(value, env), function*(bound) {
+						const { start, end } = bound as { start: Value; end: Value };
+						yield* each(targets(path, value, env), function*(pair) {
+							yield [ extend(pair[0], bound), intrinsics.slice(pair[1], start, end) ] as [ Path, Value ];
+						});
+					});
+				});
+			} else {
+				return function*(path, value, env) {
+					for (const bound of bounds(value, env)) {
+						const { start, end } = bound as { start: Value; end: Value };
+						for (const [ pp, vv ] of targets(path, value, env)) {
+							yield [ extend(pp, bound), intrinsics.slice(vv, start, end) ];
+						}
+					}
+				};
+			}
+		},
+	};
+}
+
 /** jq's semantics over JavaScript's values: doubles, and JavaScript's order. */
 export const runtime: Runtime = {
 	invalidPath: intrinsics.invalidPath,
@@ -143,42 +187,7 @@ export const runtime: Runtime = {
 		},
 		path: (node, render) => pathThrough(render, node.target, node.key, intrinsics.index, key => key),
 	},
-	slice: {
-		// `from` varies slowest, then `to`, then the target, as jq has it
-		value: (node, render) => combine(
-			[ render.filter(node.target), render.filter(node.to ?? nullLiteral), render.filter(node.from ?? nullLiteral) ],
-			([ value, to, from ]) => intrinsics.slice(value!, from!, to!),
-			'last',
-		),
-		path: (node, render) => {
-			const bounds = combineStreams([
-				render.filter(node.to ?? nullLiteral),
-				render.filter(node.from ?? nullLiteral),
-			], function*([ to, from ]) {
-				yield { __proto__: null, start: from!, end: to! };
-			}, 'last');
-			const targets = render.path(node.target);
-			if (isTask(bounds) || isTask(targets)) {
-				return task(function*(path, value, env) {
-					yield* each(bounds(value, env), function*(bound) {
-						const { start, end } = bound as { start: Value; end: Value };
-						yield* each(targets(path, value, env), function*(pair) {
-							yield [ extend(pair[0], bound), intrinsics.slice(pair[1], start, end) ] as [ Path, Value ];
-						});
-					});
-				});
-			} else {
-				return function*(path, value, env) {
-					for (const bound of bounds(value, env)) {
-						const { start, end } = bound as { start: Value; end: Value };
-						for (const [ pp, vv ] of targets(path, value, env)) {
-							yield [ extend(pp, bound), intrinsics.slice(vv, start, end) ];
-						}
-					}
-				};
-			}
-		},
-	},
+	slice: sliceOver(value => value),
 	iterate: {
 		value: (node, render) => combineStreams([ render.filter(node.target) ], ([ value ]) => intrinsics.iterate(value!)),
 		path: (node, render) => {
