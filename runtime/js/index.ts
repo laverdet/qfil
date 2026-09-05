@@ -18,7 +18,7 @@ import { dates } from './date.js';
 import { add, delpaths, format, getpath, halt, has, isFormat, iterate, keys, length, recursePaths, setpath } from './intrinsics.js';
 import { assertArray, assertNumber, assertString, unary, withFilter, withPath } from './library.js';
 import { math } from './math.js';
-import { matching, regex } from './regex.js';
+import { matching, regex } from './regexp.js';
 import { strings } from './strings.js';
 import { JqError, compare, describe, fromjson, isNumber, isObject, newObject, tojson, tonumber, tostring, truthy, typeOf } from './value.js';
 import { Await, awaited, each, feed, firstOf, forward, isTask, overload, runtimePathFunction, streams, task, values } from '#/compiler/filter.js';

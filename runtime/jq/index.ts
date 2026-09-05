@@ -3,13 +3,13 @@
  * keeping a number's spelling, and the matching functions reading a regex's flags as jq does.
  */
 import type { Lib } from '#/compiler/filter.js';
-import type { RegexCompiler } from '#/runtime/js/regex.js';
+import type { RegexCompiler } from '#/runtime/js/regexp.js';
 import { dates } from './date.js';
 import { math } from './math.js';
 import { compare, fromjson, tonumber } from './value.js';
 import { lib as js, ordered } from '#/runtime/js/index.js';
 import { assertString, unary } from '#/runtime/js/library.js';
-import { ignoringEmpty, matching, regex } from '#/runtime/js/regex.js';
+import { ignoringEmpty, matching, regex } from '#/runtime/js/regexp.js';
 import { JqError } from '#/runtime/js/value.js';
 
 /**

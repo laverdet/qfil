@@ -260,7 +260,7 @@ only calls into a recursion pay for any of this; everything else compiles as bef
 - `runtime/js/runtime.ts` — the JavaScript runtime: a handler per kind of node, jq's semantics in
   JavaScript, and `invalidPath`, what a value is where a path expression was needed.
 - `runtime/js/index.ts` — the JavaScript library, keyed by name: the core functions, assembled
-  with `strings.ts`, `math.ts` and `regex.ts` over `library.ts`, what a function is built from;
+  with `strings.ts`, `math.ts` and `regexp.ts` over `library.ts`, what a function is built from;
   `prelude.ts` — the builtins defined in the language itself.
 - `runtime/js/intrinsics.ts` — the operations on values: indexing, arithmetic, paths, the
   `Editor`, formats.
