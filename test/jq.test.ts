@@ -21,6 +21,11 @@ agree('jq runtime: jq\'s order', [
 	[ 'sort_by(.a)', [ { a: [ 1 ] }, { a: 'x' }, { a: null }, { a: {} } ] ],
 ]);
 
+agree('jq runtime: trims strip C\'s whitespace', [
+	[ '"\\u0085x\\u0085y\\u0085" | [ltrim, rtrim, trim]' ],
+	[ '" \\u00a0x\\u3000 " | trim' ],
+]);
+
 agree('jq runtime: jq\'s regex flags', [
 	// `x` ignores whitespace and comments outside a class; an escaped space is a space
 	[ '[test("a b"; "x"), test("a # comment\\nb"; "x")]', 'ab' ],

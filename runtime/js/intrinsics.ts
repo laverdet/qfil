@@ -605,6 +605,15 @@ const formats: Readonly<Record<string, (value: Value) => string>> = {
 	sh: value => Array.isArray(value) ? value.map(shWord).join(' ') : shWord(value),
 	base64: value => Buffer.from(tostring(value), 'utf8').toString('base64'),
 	base64d: value => Buffer.from(tostring(value), 'base64').toString('utf8'),
+	urid: value => {
+		const text = tostring(value);
+		try {
+			return decodeURIComponent(text);
+		} catch {
+			// The engine's URIError, spoken as the language's own
+			throw new JqError(`${describe(text)} is not a valid uri encoding`);
+		}
+	},
 };
 
 export function isFormat(name: string): boolean {

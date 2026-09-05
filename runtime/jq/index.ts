@@ -81,12 +81,19 @@ const oniguruma: RegexCompiler = (pattern, flags, extra) => {
 	return skipEmpty ? ignoringEmpty(compiled) : compiled;
 };
 
+/** The whitespace jq's trims strip: JavaScript's own set, and U+0085 (NEL), which C's `iswspace` counts too. */
+const leading = /^[\s\u0085]+/;
+const trailing = /[\s\u0085]+$/;
+
 export const lib: Lib = {
 	...js,
 	...ordered(compare),
 	...matching(oniguruma),
 	...math,
 	...dates,
+	ltrim: unary(input => assertString(input, 'ltrim').replace(leading, '')),
+	rtrim: unary(input => assertString(input, 'rtrim').replace(trailing, '')),
+	trim: unary(input => assertString(input, 'trim').replace(leading, '').replace(trailing, '')),
 	tonumber: unary(tonumber),
 	have_literal_numbers: _render => () => true,
 	fromjson: unary(input => fromjson(assertString(input, 'fromjson'))),

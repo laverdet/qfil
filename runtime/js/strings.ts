@@ -62,14 +62,20 @@ function utf8Bytes(text: string): number {
 	return bytes;
 }
 
+/** A codepoint as `implode` reads it: floats floor, and anything unencodable — a negative, past U+10FFFF, a surrogate half — becomes U+FFFD, as jq has it. */
+function codepoint(point: Value): number {
+	if (!isNumber(point) || Number.isNaN(Number(point))) {
+		throw new JqError(`${describe(point)} is not a valid codepoint`);
+	}
+	const whole = Math.floor(point);
+	return whole < 0 || whole > 0x10ffff || (whole >= 0xd800 && whole <= 0xdfff) ? 0xfffd : whole;
+}
+
 function imploded(value: Value): string {
 	const points = assertArray(value, 'implode');
 	let text = '';
 	for (const point of points) {
-		if (!isNumber(point) || !Number.isInteger(Number(point)) || point < 0 || point > 0x10ffff) {
-			throw new JqError(`${describe(point)} is not a valid codepoint`);
-		}
-		text += String.fromCodePoint(Number(point));
+		text += String.fromCodePoint(codepoint(point));
 	}
 	return text;
 }
@@ -78,13 +84,12 @@ function join(value: Value, separator: Value): Value {
 	let result: Value = null;
 	let first = true;
 	for (const element of iterate(value)) {
-		const piece = function() {
+		const piece = function(): Value {
 			if (element === null) {
 				return '';
-			} else if (typeof element === 'string') {
+			} else if (typeof element === 'string' || Array.isArray(element) || isObject(element)) {
+				// A container is no string; `add` refuses it with both halves named, as jq's join does
 				return element;
-			} else if (Array.isArray(element) || isObject(element)) {
-				throw new JqError(`${describe(element)} cannot be added to a string`);
 			} else {
 				return tojson(element);
 			}
@@ -100,11 +105,13 @@ export const strings: Lib = {
 	endswith: (render, suffix) => values(render, [ suffix ], (input, value) => assertString(input, 'endswith').endsWith(assertString(value, 'endswith'))),
 	ltrimstr: (render, prefix) => values(render, [ prefix ], (input, value) => {
 		const text = assertString(input, 'ltrimstr');
-		return typeof value === 'string' && text.startsWith(value) ? text.slice(value.length) : text;
+		const affix = assertString(value, 'ltrimstr');
+		return text.startsWith(affix) ? text.slice(affix.length) : text;
 	}),
 	rtrimstr: (render, suffix) => values(render, [ suffix ], (input, value) => {
 		const text = assertString(input, 'rtrimstr');
-		return typeof value === 'string' && value !== '' && text.endsWith(value) ? text.slice(0, -value.length) : text;
+		const affix = assertString(value, 'rtrimstr');
+		return affix !== '' && text.endsWith(affix) ? text.slice(0, -affix.length) : text;
 	}),
 	join: (render, separator) => values(render, [ separator ], (input, value) => join(input, value)),
 	explode: unary(input => [ ...assertString(input, 'explode') ].map(char => char.codePointAt(0)!)),

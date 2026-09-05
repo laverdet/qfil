@@ -629,4 +629,10 @@ agree('what jq\'s own suite taught', [
 	[ '"abc" | try (. * 1000000000) catch .' ],
 	[ 'try getpath([range(10001) | 0]) catch .' ],
 	[ 'try setpath([range(10001) | 0]; 0) catch .' ],
+	[ '[.[] | implode | explode]', [ [ -1 ], [ 1114112 ], [ 55296 ], [ 57344 ], [ 1.9 ] ] ],
+	[ 'try ([nan] | implode) catch "E"' ],
+	[ 'try ("hi" | ltrimstr(1)) catch "E", try ("hi" | rtrimstr(null)) catch "E"' ],
+	[ '@uri, (@uri | @urid)', 'a b&c=!*\'()\u00e9' ],
+	[ 'try ("%zz" | @urid) catch "E"' ],
+	[ 'try join(",") catch .', [ '1', '2', { a: 1 } ] ],
 ]);
