@@ -21,6 +21,7 @@ export function tabled2(fns: Readonly<Record<string, (left: number, right: numbe
 
 /** The functions of the input alone that `Math` speaks. */
 const unaryOf: Readonly<Record<string, (value: number) => number>> = {
+	abs: Math.abs,
 	acos: Math.acos,
 	acosh: Math.acosh,
 	asin: Math.asin,

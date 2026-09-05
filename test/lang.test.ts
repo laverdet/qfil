@@ -635,4 +635,13 @@ agree('what jq\'s own suite taught', [
 	[ '@uri, (@uri | @urid)', 'a b&c=!*\'()\u00e9' ],
 	[ 'try ("%zz" | @urid) catch "E"' ],
 	[ 'try join(",") catch .', [ '1', '2', { a: 1 } ] ],
+	[ '[nth(0,3,4,5; range(4))]' ],
+	[ 'try nth(-1; range(3)) catch .' ],
+	[ '[-0, 0, -10, -1.1] | map(abs)' ],
+	[ 'from_entries', [ { Name: 'd', Value: 4 }, { name: 'a', v: 2 }, { key: 'k', value: 1, v: 9 } ] ],
+	[ 'try ([{}] | from_entries) catch "E"' ],
+	[ 'from_entries', [ { name: 'a', value: 1 }, { k: 'b', v: 2 } ] ],
+	[ 'pick(first)', [ 1, 2 ] ],
+	[ 'try pick(last) catch .', [ 1, 2 ] ],
+	[ '[path(first, last)]', [ 1, 2 ] ],
 ]);

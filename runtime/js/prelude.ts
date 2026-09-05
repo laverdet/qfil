@@ -19,16 +19,24 @@ def objects: select(type == "object");
 def iterables: select(type == "array" or type == "object");
 def scalars: select(type != "array" and type != "object");
 def toboolean: if type == "boolean" then . elif . == "true" then true elif . == "false" then false else error("\\(.) cannot be parsed as a boolean") end;
-def abs: if . < 0 then - . else . end;
 def add(f): reduce f as $x (null; . + $x);
 def map_values(f): .[] |= f;
+def from_entries: map({ (.key // .Key // .name // .Name): if has("value") then .value else .Value end }) | add // {};
+def with_entries(f): to_entries | map(f) | from_entries;
 def paths(f): . as $in | paths | select(. as $p | $in | getpath($p) | f);
 def in(xs): . as $x | xs | has($x);
 def recurse: recurse(.[]?);
 def recurse(f; cond): def r: ., (f | select(cond) | r); r;
 def last(f): reduce f as $x (null; [$x]) | if . == null then empty else .[0] end;
+def first: .[0];
+def last: .[-1];
 def nth($n): .[$n];
-def nth($n; f): if $n < 0 then error("Out of bounds negative array index") else last(limit($n + 1; f)) end;
+def nth($n; f):
+	if $n < 0 then
+		error("nth doesn't support negative indices")
+	else
+		[limit($n + 1; f)] | if length > $n then .[$n] else empty end
+	end;
 def any(generator; condition): isempty(first(generator | select(condition))) | not;
 def any(condition): any(.[]; condition);
 def all(generator; condition): isempty(first(generator | select(condition | not)));

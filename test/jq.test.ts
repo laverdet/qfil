@@ -26,6 +26,13 @@ agree('jq runtime: trims strip C\'s whitespace', [
 	[ '" \\u00a0x\\u3000 " | trim' ],
 ]);
 
+agree('jq runtime: abs through the runtime\'s negate', [
+	[ '-1E+1000 | abs | tojson' ],
+	[ '"x" | abs' ],
+	[ 'try (null | abs) catch .' ],
+	[ '[nan | abs | isnan]' ],
+]);
+
 agree('jq runtime: jq\'s regex flags', [
 	// `x` ignores whitespace and comments outside a class; an escaped space is a space
 	[ '[test("a b"; "x"), test("a # comment\\nb"; "x")]', 'ab' ],

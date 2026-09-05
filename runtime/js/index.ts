@@ -13,9 +13,9 @@
  *
  * `compile` takes a `lib` option, so an application may supply a library of its own.
  */
-import type { Context, Env, Lib, Path, Render, Resumed, Stream, Value, ValueObject } from '#/compiler/filter.js';
+import type { Context, Env, Lib, Path, Render, Resumed, Stream, Value } from '#/compiler/filter.js';
 import { dates } from './date.js';
-import { add, delpaths, field, format, getpath, halt, has, isFormat, iterate, keys, length, recursePaths, setpath } from './intrinsics.js';
+import { add, delpaths, format, getpath, halt, has, isFormat, iterate, keys, length, recursePaths, setpath } from './intrinsics.js';
 import { assertArray, assertNumber, assertString, unary, withFilter, withPath } from './library.js';
 import { math } from './math.js';
 import { matching, regex } from './regex.js';
@@ -171,18 +171,6 @@ function toEntries(value: Value): Value[] {
 		return Object.keys(value).map(key => ({ __proto__: null, key, value: value[key]! }));
 	}
 	throw new JqError(`${describe(value)} has no keys`);
-}
-
-function fromEntries(value: Value): ValueObject {
-	const result = newObject();
-	for (const entry of assertArray(value, 'from_entries')) {
-		const key = field(entry, 'key');
-		if (typeof key !== 'string') {
-			throw new JqError(`Cannot use ${describe(key)} as object key`);
-		}
-		result[key] = field(entry, 'value');
-	}
-	return result;
 }
 
 /**
@@ -370,8 +358,6 @@ export const lib: Lib = {
 		}
 	},
 	to_entries: unary(toEntries),
-	from_entries: unary(fromEntries),
-	with_entries: withFilter(filter => (input, env) => fromEntries(mapOver(toEntries(input), entry => filter(entry, env)))),
 	map: withFilter(filter => (input, env) => mapOver(iterate(input), value => filter(value, env))),
 	recurse: withFilter(update => function*(input, env) {
 		yield* unroll(repeat(input, env, update));
