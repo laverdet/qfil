@@ -29,9 +29,13 @@ not byte-for-byte parity with the `jq` binary. The test suite (`pnpm test`) runs
 both and compares outputs as JSON values, and a handful of cases document where this
 implementation deliberately differs:
 
-- Numbers are JavaScript doubles, written as JSON writes them: `1e-7` not `1E-7`, and a literal like
-  `100000000000000000000000` does not survive unchanged as jq 1.7's decNumber support lets it.
-  Infinity is written as the largest finite number, as jq does; NaN as `null`.
+- Numbers are JavaScript doubles, and a literal like `100000000000000000000000` does not survive
+  unchanged as jq 1.7's decNumber support lets it. The JavaScript runtime writes them as JSON
+  does (`1e-7` not `1E-7`, `1e+20` not `100000000000000000000`); the jq runtime (`runtime/jq`)
+  keeps a literal's spelling as jq does — `1.000`, `1E+2`, `11.0` for `1.10e1` — through
+  variables, containers, `tostring`, `tonumber`, `fromjson`, `sort` and negation, until
+  arithmetic touches it. Infinity is written as the largest finite number, as jq does; NaN as
+  `null`.
 - Objects are plain JavaScript objects, so integer-like keys iterate first (`{"b":1,"1":2}` writes as
   `{"1":2,"b":1}`). Every object the language makes has a null prototype, so `__proto__` is an
   ordinary key.
@@ -46,10 +50,6 @@ implementation deliberately differs:
   as `0`; `%s` and `strftime`'s zone directives read the broken-down time as UTC where C consults
   the timezone; `input_filename` is null and `input_line_number` 0; the module system —
   `modulemeta`, `get_search_list` and kin — does not exist and says so.
-- Numbers are doubles, printed as JavaScript prints them (`1e+20` comes out as
-  `100000000000000000000`). The jq runtime (`runtime/jq`) keeps a literal's spelling as jq 1.7
-  does — `1.000`, `1E+2`, `11.0` for `1.10e1` — through variables, containers, `tostring`,
-  `tonumber`, `fromjson`, `sort` and negation, until arithmetic touches it.
 - Order, in the JavaScript runtime, is JavaScript's: strings compare by code unit, containers are
   NaN, and anything else subtracts, so `[] < {}` is false, objects do not sort, and
   `sort_by`/`group_by` compare their keys element by element. The jq runtime has jq's total order:
