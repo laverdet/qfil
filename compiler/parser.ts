@@ -446,7 +446,7 @@ class Parser {
 		return { type: 'def', name, params, body, rest: this.pipe(), at };
 	}
 
-	// object := '{' (entry (',' entry)*)? '}'
+	// object := '{' (entry (',' entry)* ','?)? '}'
 	// entry := '$' IDENT (':' value)? | IDENT (':' value)? | string (':' value)? | '(' pipe ')' ':' value
 	// value := pipe, with `,` reserved for separating entries
 	private object(): ast.ObjectCons {
@@ -454,7 +454,7 @@ class Parser {
 			if (this.peek('}')) {
 				return [];
 			}
-			return this.separated(',', () => this.objectEntry());
+			return this.separated(',', () => this.objectEntry(), '}');
 		});
 		this.expect('}');
 		return { type: 'object', entries };
@@ -636,9 +636,13 @@ class Parser {
 	}
 
 	// One or more of `item`, separated by `separator`
-	private separated<Type>(separator: string, item: () => Type): Type[] {
+	/** One `item` at least, more after each `separator` — which may trail, before `terminator`, where one is given. */
+	private separated<Type>(separator: string, item: () => Type, terminator?: string): Type[] {
 		const items = [ item() ];
 		while (this.accept(separator)) {
+			if (terminator !== undefined && this.peek(terminator)) {
+				break;
+			}
 			items.push(item());
 		}
 		return items;

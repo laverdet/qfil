@@ -54,6 +54,7 @@ implementation deliberately differs:
   NaN, and anything else subtracts, so `[] < {}` is false, objects do not sort, and
   `sort_by`/`group_by` compare their keys element by element. The jq runtime has jq's total order:
   null < false < true < numbers < strings < arrays < objects.
+- A trailing comma may end an object literal — `{a: 1, b: 2,}` — an extension; jq takes none.
 - `repeat(f)` keeps its documented meaning (`., (f | repeat(f))`); jq 1.8.2 yields `f` of the same
   input forever.
 - `reduce` and `foreach` are path expressions whose state is a path and the value at it, so

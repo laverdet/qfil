@@ -416,6 +416,15 @@ agree('builtins', [
 	[ 'strptime("%Y")', 'abc' ],
 ]);
 
+divergent('a trailing comma may end an object', [
+	// An extension; jq takes none
+	[ '{a: 1, b: 2,}', null, [ { a: 1, b: 2 } ] ],
+	[ '{a: (1,2),}', null, [ { a: 1 }, { a: 2 } ] ],
+	[ '{,}', null, 'error' ],
+	[ '{a: 1,,}', null, 'error' ],
+	[ '[1, 2,]', null, 'error' ],
+]);
+
 divergent('jq 1.8 quirks not followed', [
 	// jq 1.8.2's `repeat` yields `f` of the same input forever; the documented definition is kept
 	[ '[limit(5; repeat(. * 2))]', 1, [ [ 1, 2, 4, 8, 16 ] ] ],
