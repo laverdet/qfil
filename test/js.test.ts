@@ -41,6 +41,10 @@ divergent('regular expressions are JavaScript\'s', [
 	[ 'test("a";"x")', 'a', 'error' ],
 	// Offsets and lengths count UTF-16 code units
 	[ '[match("😀a"; "g") | .offset, .length]', 'x😀a😀a', [ [ 1, 3, 4, 3 ] ] ],
+	// An unmatched group has no name in the JavaScript reading, so `capture` drops it; the jq
+	// flavour reads names off the pattern source and keeps it
+	[ '"b" | capture("(?<x>a)?b?")', null, [ {} ] ],
+	[ '"b" | capture("(?<x>a?)?b?")', null, [ {} ] ],
 ]);
 
 describe('compiled shape', () => {

@@ -184,6 +184,8 @@ agree('jq runtime: what its own suite taught', [
 	[ '[nan % 1, 1 % nan | isnan]' ],
 	[ '[range(3)] | [.[nan:1], .[1:nan], .[nan]]' ],
 	[ '"\\ufeff{\\"a\\":1}" | fromjson' ],
+	[ '"b", "c" | capture("(?<x>a)?b?")' ],
+	[ '"c" | [match("(?<x>a)?b?")]' ],
 ]);
 
 divergent('spelling is decNumber\'s literal behavior', [

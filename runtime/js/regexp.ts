@@ -62,7 +62,7 @@ function ignoresEmpty(regex: RegExp): boolean {
 }
 
 /** Every match when the pattern is global, otherwise the first; a regex marked by `ignoringEmpty` counts only the nonempty ones. */
-function execAll(regex: RegExp, input: Value): RegExpExecArray[] {
+export function execAll(regex: RegExp, input: Value): RegExpExecArray[] {
 	const text = assertString(input, 'match');
 	if (regex.global) {
 		const all = [ ...text.matchAll(regex) ];
@@ -81,16 +81,12 @@ function execAll(regex: RegExp, input: Value): RegExpExecArray[] {
 	}
 }
 
-/** A match as jq's `match` object. */
-function matchObject(match: RegExpExecArray): ValueObject {
+/** A match as jq's `match` object; where each group's name comes from is the flavour's to say. */
+export function matchObject(match: RegExpExecArray, names: readonly (string | null)[]): ValueObject {
 	const indices: readonly ([ number, number ] | undefined)[] = match.indices!;
-	// The indices of a named group are the same pair object as its positional entry
-	const names = new Map(Object.entries<[ number, number ] | undefined>(match.indices!.groups ?? {})
-		.filter(([ , range ]) => range !== undefined)
-		.map(([ name, range ]) => [ range, name ]));
 	const captures = indices.slice(1).map((range, ii) => range === undefined
-		? { __proto__: null, offset: -1, length: 0, string: null, name: null }
-		: { __proto__: null, offset: range[0], length: range[1] - range[0], string: match[ii + 1]!, name: names.get(range) ?? null });
+		? { __proto__: null, offset: -1, length: 0, string: null, name: names[ii] ?? null }
+		: { __proto__: null, offset: range[0], length: range[1] - range[0], string: match[ii + 1]!, name: names[ii] ?? null });
 	return { __proto__: null, offset: match.index, length: match[0].length, string: match[0], captures };
 }
 
@@ -132,7 +128,7 @@ function *substitute(regex: RegExp, input: Value, replacement: (groups: Value) =
 	}
 }
 
-function regexFunction(compile: RegexCompiler, extra: string, body: (regex: RegExp, input: Value) => Iterable<Value>): LibFunction {
+export function regexFunction(compile: RegexCompiler, extra: string, body: (regex: RegExp, input: Value) => Iterable<Value>): LibFunction {
 	const withRegex = (regexes: WithRegex): Stream => function*(input, env) {
 		yield* regexes(input, env, body);
 	};
@@ -160,7 +156,16 @@ function *testWith(compiled: RegExp, input: Value): Generator<Value> {
 }
 
 function matchWith(compiled: RegExp, input: Value): Value[] {
-	return execAll(compiled, input).map(matchObject);
+	return execAll(compiled, input).map(match => matchObject(match, matchNames(match)));
+}
+
+/** The participating groups' names, by number — the JavaScript reading: an unmatched group has none. */
+function matchNames(match: RegExpExecArray): (string | null)[] {
+	// The indices of a named group are the same pair object as its positional entry
+	const byRange = new Map(Object.entries<[ number, number ] | undefined>(match.indices!.groups ?? {})
+		.filter(([ , range ]) => range !== undefined)
+		.map(([ name, range ]) => [ range, name ]));
+	return match.indices!.slice(1).map(range => range === undefined ? null : byRange.get(range) ?? null);
 }
 
 function *splitWith(compiled: RegExp, input: Value): Generator<Value> {
