@@ -192,9 +192,6 @@ agree('jq runtime: what its own suite taught', [
 
 // Core-language departures, raised here because jq compatibility is this flavor's claim
 divergent('jq 1.8 quirks not followed', [
-	// jq 1.8.2's `repeat` yields `f` of the same input forever; the documented definition is kept
-	[ '[limit(5; repeat(. * 2))]', 1, [ [ 1, 2, 4, 8, 16 ] ] ],
-	[ '[limit(3; repeat(. * 2, . * 3))]', 1, [ [ 1, 2, 4 ] ] ],
 	// jq tracks paths through `reduce` and `foreach` only by accident: the path resets whenever the
 	// fold is backtracked into (`[path(…)]` of the same fold gives `[[]]`), and any non-null value
 	// along the way is an "Invalid path expression". Here the state is a path and its value

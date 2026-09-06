@@ -424,6 +424,11 @@ agree('builtins', [
 	// The harness pipes input without a trailing newline, where the binary too says line 0
 	[ 'input_line_number' ],
 	[ 'modulemeta', 'x' ],
+	// `repeat(exp)` is `exp` of the same input, over and over, until `exp` raises
+	[ '[limit(5; repeat(. * 2))]', 1 ],
+	[ '[limit(5; repeat(. * 2, . * 3))]', 1 ],
+	[ '[repeat(.*2, error)?]', 1 ],
+	[ 'try repeat(error("x")) catch .' ],
 	[ 'debug', [ 1 ] ],
 	[ 'strftime(1)', 1425599621 ],
 	[ 'strftime("%Y")', 'a' ],

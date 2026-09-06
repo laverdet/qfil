@@ -26,7 +26,7 @@ export function *unroll(step: Iterable<Value | Recur>): Generator<Value> {
 	}
 }
 
-/** `def repeat(f): ., (f | repeat(f));` — which is also `recurse(f)`. */
+/** `def recurse(f): def r: ., (f | r); r;` */
 export function *repeating(state: Value, env: Env, update: Stream): Generator<Value | Recur> {
 	yield state;
 	for (const next of update(state, env)) {

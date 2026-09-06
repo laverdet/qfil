@@ -233,8 +233,12 @@ export const map = withFilter(filter => (input, env) => mapOver(intrinsics.itera
 export const recurse = withFilter(update => function*(input, env) {
 	yield* unroll(repeating(input, env, update));
 });
+// `def repeat(exp): def _repeat: exp, _repeat; _repeat;` — the same input every round, an
+// endless stream until `exp` raises: `[repeat(.*2, error)?]` of 1 is `[2]`
 export const repeat = withFilter(update => function*(input, env) {
-	yield* unroll(repeating(input, env, update));
+	while (true) {
+		yield* update(input, env);
+	}
 });
 export const walk = withFilter(filter => function*(input, env) {
 	yield* walking(input, env, filter);

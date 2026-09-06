@@ -61,8 +61,6 @@ implementation deliberately differs:
   `sort_by`/`group_by` compare their keys element by element. The jq runtime has jq's total order:
   null < false < true < numbers < strings < arrays < objects.
 - A trailing comma may end an object literal — `{a: 1, b: 2,}` — as jq 1.8 takes one; neither takes one in an array.
-- `repeat(f)` keeps its documented meaning (`., (f | repeat(f))`); jq 1.8.2 yields `f` of the same
-  input forever.
 - `reduce` and `foreach` are path expressions whose state is a path and the value at it, so
   `path(reduce ("a","b") as $k (.; .[$k]))` is `["a","b"]` whatever the input. jq's own tracking
   through a fold is accidental: the path resets when the fold is backtracked into, and any non-null
