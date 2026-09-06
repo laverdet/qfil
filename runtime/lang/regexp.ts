@@ -1,11 +1,12 @@
 /**
  * The functions that match a regex — `test`, `match`, `split`, `sub`, `gsub` — over a
- * `RegexCompiler`, since what a pattern and its flags mean is the library's to say: JavaScript's
- * reading here, flags included, and jq's in the jq library. `u` and `d` are always set, so
- * patterns are Unicode-aware and captures carry offsets; offsets are UTF-16 code units.
+ * `RegexCompiler`, since what a pattern and its flags mean is a flavour's to say: `regex` is
+ * JavaScript's reading, flags included, and the jq flavour translates jq's onto it. `u` and `d`
+ * are always set, so patterns are Unicode-aware and captures carry offsets; offsets are UTF-16
+ * code units.
  */
 import type * as ast from '#/compiler/ast.js';
-import type { Env, Lib, LibFunction, Render, Stream, Value, ValueObject } from '#/compiler/filter.js';
+import type { Env, LibFunction, Render, Stream, Value, ValueObject } from '#/compiler/filter.js';
 import { split } from './intrinsics.js';
 import { assertString } from './library.js';
 import { JqError, describe, newObject } from './value.js';
@@ -189,14 +190,14 @@ function *splitWith(compiled: RegExp, input: Value): Generator<Value> {
  * since what a pattern and its flags mean is the library's to say: JavaScript's reading in this
  * one, jq's in the jq library.
  */
-export function matching(compile: RegexCompiler): Lib {
+export function matching(compile: RegexCompiler) {
 	return {
 		test: regexFunction(compile, '', testWith),
 		match: regexFunction(compile, '', matchWith),
 		sub: subFunction(compile, ''),
 		gsub: subFunction(compile, 'g'),
 		split: overload(
-			(render, separator) => values(render, [ separator ], (input, value) => split(assertString(input, 'split'), assertString(value, 'split'))),
+			values((input, value) => split(assertString(input, 'split'), assertString(value, 'split'))),
 			(render, pattern, flags) => function*(input, env) {
 				yield* regexOf(compile, render, pattern, flags, 'g')(input, env, splitWith);
 			},

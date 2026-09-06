@@ -9,9 +9,9 @@ import process from 'node:process';
 import { after, describe, it } from 'node:test';
 import { differential } from './harness.js';
 import { JqError } from '#/index.js';
-import { runtime as fsRuntime } from '#/runtime/fs/runtime.js';
+import * as fsRuntime from '#/runtime/fs/runtime.js';
 import { entry } from '#/runtime/fs/value.js';
-import { lib } from '#/runtime/js/index.js';
+import * as lib from '#/runtime/js/index.js';
 
 const { run } = differential({ runtime: fsRuntime, lib });
 

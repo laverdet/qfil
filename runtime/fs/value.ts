@@ -9,7 +9,7 @@
 import type { Value, ValueObject } from '#/compiler/filter.js';
 import * as fs from 'node:fs';
 import { basename, join } from 'node:path';
-import { JqError } from '#/runtime/js/value.js';
+import { JqError } from '#/runtime/lang/value.js';
 
 const marker: unique symbol = Symbol('qfil.entry');
 

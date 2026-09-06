@@ -6,9 +6,9 @@
 import type { Command } from './cli.js';
 import type { Value } from 'qfil/compiler/filter.js';
 import process from 'node:process';
-import { runtime } from 'qfil/runtime/fs/runtime.js';
+import * as runtime from 'qfil/runtime/fs/runtime.js';
 import { entry } from 'qfil/runtime/fs/value.js';
-import { lib } from 'qfil/runtime/js/index.js';
+import * as lib from 'qfil/runtime/js/index.js';
 import { execute } from './cli.js';
 
 const USAGE = `usage: fq [options] <filter> [root...]

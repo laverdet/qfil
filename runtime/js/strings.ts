@@ -2,11 +2,11 @@
  * Strings: the predicates, the trims, ASCII case, codepoints, byte lengths, `join`, and the
  * searches — `indices` and `contains` — which reach over to arrays as jq's do.
  */
-import type { Lib, Value } from '#/compiler/filter.js';
-import { add, iterate } from './intrinsics.js';
-import { assertArray, assertString, unary } from './library.js';
-import { JqError, contains, describe, equal, isNumber, isObject, tojson } from './value.js';
+import type { Value } from '#/compiler/filter.js';
 import { values } from '#/compiler/filter.js';
+import { add, iterate } from '#/runtime/lang/intrinsics.js';
+import { assertArray, assertString, unary } from '#/runtime/lang/library.js';
+import { JqError, contains as containsOf, describe, equal, isNumber, isObject, tojson } from '#/runtime/lang/value.js';
 
 /** Every offset of the needle — a substring, a subarray, an element — overlapping matches included. */
 function indicesOf(input: Value, needle: Value): Value {
@@ -80,7 +80,7 @@ function imploded(value: Value): string {
 	return text;
 }
 
-function join(value: Value, separator: Value): Value {
+function joined(value: Value, separator: Value): Value {
 	let result: Value = null;
 	let first = true;
 	for (const element of iterate(value)) {
@@ -100,28 +100,26 @@ function join(value: Value, separator: Value): Value {
 	return result ?? '';
 }
 
-export const strings: Lib = {
-	startswith: (render, prefix) => values(render, [ prefix ], (input, value) => assertString(input, 'startswith').startsWith(assertString(value, 'startswith'))),
-	endswith: (render, suffix) => values(render, [ suffix ], (input, value) => assertString(input, 'endswith').endsWith(assertString(value, 'endswith'))),
-	ltrimstr: (render, prefix) => values(render, [ prefix ], (input, value) => {
-		const text = assertString(input, 'ltrimstr');
-		const affix = assertString(value, 'ltrimstr');
-		return text.startsWith(affix) ? text.slice(affix.length) : text;
-	}),
-	rtrimstr: (render, suffix) => values(render, [ suffix ], (input, value) => {
-		const text = assertString(input, 'rtrimstr');
-		const affix = assertString(value, 'rtrimstr');
-		return affix !== '' && text.endsWith(affix) ? text.slice(0, -affix.length) : text;
-	}),
-	join: (render, separator) => values(render, [ separator ], (input, value) => join(input, value)),
-	explode: unary(input => [ ...assertString(input, 'explode') ].map(char => char.codePointAt(0)!)),
-	implode: unary(imploded),
-	utf8bytelength: unary(input => utf8Bytes(assertString(input, 'utf8bytelength'))),
-	ltrim: unary(input => assertString(input, 'ltrim').trimStart()),
-	rtrim: unary(input => assertString(input, 'rtrim').trimEnd()),
-	trim: unary(input => assertString(input, 'trim').trim()),
-	indices: (render, needle) => values(render, [ needle ], indicesOf),
-	contains: (render, other) => values(render, [ other ], (input, value) => contains(input, value)),
-	ascii_downcase: unary(input => assertString(input, 'ascii_downcase').replace(/[A-Z]+/g, text => text.toLowerCase())),
-	ascii_upcase: unary(input => assertString(input, 'ascii_upcase').replace(/[a-z]+/g, text => text.toUpperCase())),
-};
+export const startswith = values((input, value) => assertString(input, 'startswith').startsWith(assertString(value, 'startswith')));
+export const endswith = values((input, value) => assertString(input, 'endswith').endsWith(assertString(value, 'endswith')));
+export const ltrimstr = values((input, value) => {
+	const text = assertString(input, 'ltrimstr');
+	const affix = assertString(value, 'ltrimstr');
+	return text.startsWith(affix) ? text.slice(affix.length) : text;
+});
+export const rtrimstr = values((input, value) => {
+	const text = assertString(input, 'rtrimstr');
+	const affix = assertString(value, 'rtrimstr');
+	return affix !== '' && text.endsWith(affix) ? text.slice(0, -affix.length) : text;
+});
+export const join = values(joined);
+export const explode = unary(input => [ ...assertString(input, 'explode') ].map(char => char.codePointAt(0)!));
+export const implode = unary(imploded);
+export const utf8bytelength = unary(input => utf8Bytes(assertString(input, 'utf8bytelength')));
+export const ltrim = unary(input => assertString(input, 'ltrim').trimStart());
+export const rtrim = unary(input => assertString(input, 'rtrim').trimEnd());
+export const trim = unary(input => assertString(input, 'trim').trim());
+export const indices = values(indicesOf);
+export const contains = values(containsOf);
+export const ascii_downcase = unary(input => assertString(input, 'ascii_downcase').replace(/[A-Z]+/g, text => text.toLowerCase()));
+export const ascii_upcase = unary(input => assertString(input, 'ascii_upcase').replace(/[a-z]+/g, text => text.toUpperCase()));

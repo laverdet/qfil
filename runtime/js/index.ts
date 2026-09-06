@@ -1,10 +1,11 @@
 /**
- * The default library: named functions. Each receives a `Render` and the syntax of its arguments,
- * with the run's context as `this`, and returns the filter of a call: a function of an input and
- * an environment, a generator function when it yields a stream. That is the whole of a declaration.
- * A name that takes several numbers of arguments is an `overload` of one implementation per
- * arity, told apart by their parameter counts; a function that is also a path expression —
- * `select`, `first`, `getpath` — is declared with `runtimePathFunction(value, path)`.
+ * The default library: named functions, each a direct export, so the module's namespace object —
+ * `import * as lib` — is the library itself. Each function receives a `Render` and the syntax of
+ * its arguments, with the run's context as `this`, and returns the filter of a call: a function
+ * of an input and an environment, a generator function when it yields a stream. That is the whole
+ * of a declaration. A name that takes several numbers of arguments is an `overload` of one
+ * implementation per arity, told apart by their parameter counts; a function that is also a path
+ * expression — `select`, `first`, `getpath` — is declared with `runtimePathFunction(value, path)`.
  *
  * An argument is whatever the function makes of it: `values` evaluates arguments as jq's `$`
  * parameters (once per combination of their outputs); `render.generator` takes one as a filter to
@@ -13,15 +14,18 @@
  *
  * `compile` takes a `lib` option, so an application may supply a library of its own.
  */
-import type { Context, Env, Lib, Path, Render, Resumed, Stream, Value } from '#/compiler/filter.js';
-import { dates } from './date.js';
-import { add, delpaths, format, getpath, halt, has, isFormat, iterate, keys, length, recursePaths, setpath } from './intrinsics.js';
-import { assertArray, assertNumber, assertString, unary, withFilter, withPath } from './library.js';
-import { math } from './math.js';
-import { matching, regex } from './regexp.js';
-import { strings } from './strings.js';
-import { JqError, compare, describe, fromjson, isNumber, isObject, newObject, tojson, tonumber, tostring, truthy, typeOf } from './value.js';
+import type { Context, Env, Filter, LibFunction, Path, Render, Resumed, Stream, Value } from '#/compiler/filter.js';
+import { compare } from './value.js';
 import { Await, awaited, each, feed, firstOf, forward, isTask, overload, runtimePathFunction, streams, task, values } from '#/compiler/filter.js';
+import * as intrinsics from '#/runtime/lang/intrinsics.js';
+import { assertArray, assertNumber, assertString, unary, withFilter, withPath } from '#/runtime/lang/library.js';
+import { ordered } from '#/runtime/lang/order.js';
+import { matching, regex } from '#/runtime/lang/regexp.js';
+import { JqError, describe, fromjson as fromjsonOf, isNumber, isObject, newObject, tojson as tojsonOf, tonumber as tonumberOf, tostring as tostringOf, truthy, typeOf } from '#/runtime/lang/value.js';
+
+export * from './date.js';
+export * from './math.js';
+export * from './strings.js';
 
 /** The pulled input, or the language's error past the last one. */
 function pulled(next: IteratorResult<Value>): Value {
@@ -47,119 +51,10 @@ function mapOver(inputs: Iterable<Value>, filter: (value: Value) => Iterable<Val
 	return result;
 }
 
-/** `sort_by(f)` keys: `[f]` of each element. */
-function keysBy(values: Value[], filter: Stream, env: Env): Value[] {
-	return values.map(value => [ ...filter(value, env) ]);
-}
-
-/**
- * The functions that put values in order — `sort`, `sort_by`, `group_by`, `unique` — over a
- * comparison, since what the order is depends on the runtime: JavaScript's here, jq's in the jq
- * runtime. The keys of `sort_by` and `group_by` are `[f]` of each value, compared element by element.
- */
-export function ordered(compareValues: (left: Value, right: Value) => number): Lib {
-	type Comparison = typeof compareValues;
-	const compareKeys: Comparison = (left, right) => {
-		const lhs = left as Value[];
-		const rhs = right as Value[];
-		const length = Math.min(lhs.length, rhs.length);
-		for (let ii = 0; ii < length; ++ii) {
-			const order = compareValues(lhs[ii]!, rhs[ii]!);
-			if (order !== 0) {
-				return order;
-			}
-		}
-		return lhs.length - rhs.length;
-	};
-	// Indices of `items` sorted by their keys, keeping order among equal keys
-	const order = (items: Value[], keys: Value[], by: Comparison): number[] =>
-		items.map((_value, ii) => ii).sort((left, right) => by(keys[left]!, keys[right]!) || left - right);
-	const groups = (items: Value[], keys: Value[], by: Comparison): Value[][] => {
-		const result: Value[][] = [];
-		let previous: Value | undefined;
-		for (const ii of order(items, keys, by)) {
-			const key = keys[ii]!;
-			if (result.length === 0 || by(previous!, key) !== 0) {
-				result.push([]);
-				previous = key;
-			}
-			result[result.length - 1]!.push(items[ii]!);
-		}
-		return result;
-	};
-	return {
-		sort: unary(input => [ ...assertArray(input, 'sort') ].sort(compareValues)),
-		sort_by: withFilter(filter => (input, env) => {
-			const items = assertArray(input, 'sort_by');
-			return order(items, keysBy(items, filter, env), compareKeys).map(ii => items[ii]!);
-		}),
-		group_by: withFilter(filter => (input, env) => {
-			const items = assertArray(input, 'group_by');
-			return groups(items, keysBy(items, filter, env), compareKeys);
-		}),
-		unique: unary(input => {
-			const items = assertArray(input, 'unique');
-			return groups(items, items, compareValues).map(group => group[0]!);
-		}),
-		unique_by: withFilter(filter => (input, env) => {
-			const items = assertArray(input, 'unique_by');
-			return groups(items, keysBy(items, filter, env), compareKeys).map(group => group[0]!);
-		}),
-		// The first of equal least elements, and the last of equal greatest, as jq picks them
-		min: unary(input => least(assertArray(input, 'min'), assertArray(input, 'min'), compareValues)),
-		max: unary(input => greatest(assertArray(input, 'max'), assertArray(input, 'max'), compareValues)),
-		min_by: withFilter(filter => (input, env) => {
-			const items = assertArray(input, 'min_by');
-			return least(items, keysBy(items, filter, env), compareKeys);
-		}),
-		max_by: withFilter(filter => (input, env) => {
-			const items = assertArray(input, 'max_by');
-			return greatest(items, keysBy(items, filter, env), compareKeys);
-		}),
-		bsearch: (render, target) => values(render, [ target ], (input, value) => {
-			const items = assertArray(input, 'bsearch');
-			let lo = 0;
-			let hi = items.length;
-			while (lo < hi) {
-				const mid = (lo + hi) >> 1;
-				const order = compareValues(items[mid]!, value);
-				if (order === 0) {
-					return mid;
-				} else if (order < 0) {
-					lo = mid + 1;
-				} else {
-					hi = mid;
-				}
-			}
-			return -lo - 1;
-		}),
-	};
-
-	function least(items: Value[], keys: Value[], by: Comparison): Value {
-		let found: number | null = null;
-		for (let ii = 0; ii < items.length; ++ii) {
-			if (found === null || by(keys[ii]!, keys[found]!) < 0) {
-				found = ii;
-			}
-		}
-		return found === null ? null : items[found]!;
-	}
-
-	function greatest(items: Value[], keys: Value[], by: Comparison): Value {
-		let found: number | null = null;
-		for (let ii = 0; ii < items.length; ++ii) {
-			if (found === null || by(keys[ii]!, keys[found]!) >= 0) {
-				found = ii;
-			}
-		}
-		return found === null ? null : items[found]!;
-	}
-}
-
-function flatten(value: Value, depth: number): Value[] {
+function flattened(value: Value, depth: number): Value[] {
 	const result: Value[] = [];
 	for (const element of assertArray(value, 'flatten')) {
-		result.push(...Array.isArray(element) && depth > 0 ? flatten(element, depth - 1) : [ element ]);
+		result.push(...Array.isArray(element) && depth > 0 ? flattened(element, depth - 1) : [ element ]);
 	}
 	return result;
 }
@@ -200,21 +95,21 @@ function *unroll(step: Iterable<Value | Recur>): Generator<Value> {
 }
 
 /** `def repeat(f): ., (f | repeat(f));` — which is also `recurse(f)`. */
-function *repeat(state: Value, env: Env, update: Stream): Generator<Value | Recur> {
+function *repeating(state: Value, env: Env, update: Stream): Generator<Value | Recur> {
 	yield state;
 	for (const next of update(state, env)) {
-		yield new Recur(repeat(next, env, update));
+		yield new Recur(repeating(next, env, update));
 	}
 }
 
 /** `def until(cond; update): if cond then . else (update | until(cond; update)) end;` */
-function *until(state: Value, env: Env, cond: Stream, update: Stream): Generator<Value | Recur> {
+function *untilTruthy(state: Value, env: Env, cond: Stream, update: Stream): Generator<Value | Recur> {
 	for (const test of cond(state, env)) {
 		if (truthy(test)) {
 			yield state;
 		} else {
 			for (const next of update(state, env)) {
-				yield new Recur(until(next, env, cond, update));
+				yield new Recur(untilTruthy(next, env, cond, update));
 			}
 		}
 	}
@@ -233,14 +128,14 @@ function *loop(state: Value, env: Env, cond: Stream, update: Stream): Generator<
 }
 
 /** `walk(f)`: `f` applied bottom-up; a member whose result is empty is dropped, as `|=` drops it. */
-function *walk(value: Value, env: Env, filter: Stream): Generator<Value> {
+function *walking(value: Value, env: Env, filter: Stream): Generator<Value> {
 	const inner = function() {
 		if (Array.isArray(value)) {
-			return mapOver(value, element => walk(element, env, filter));
+			return mapOver(value, element => walking(element, env, filter));
 		} else if (isObject(value)) {
 			const result = newObject();
 			for (const key of Object.keys(value)) {
-				const [ output ] = walk(value[key]!, env, filter);
+				const [ output ] = walking(value[key]!, env, filter);
 				if (output !== undefined) {
 					result[key] = output;
 				}
@@ -317,297 +212,293 @@ function *limited<Type>(count: Value, outputs: Iterable<Type>): Generator<Type> 
 	}
 }
 
-export const lib: Lib = {
-	not: unary(input => !truthy(input)),
-	error: overload(
-		unary(input => {
-			throw new JqError(input);
-		}),
-		(render, message) => values(render, [ message ], (_input, value) => {
-			throw new JqError(value);
-		}),
-	),
-	length: unary(length),
-	type: unary(typeOf),
-	keys: unary(keys),
-	has: (render, key) => values(render, [ key ], (input, value) => has(input, value)),
-	add: unary(input => [ ...iterate(input) ].reduce(add, null)),
-	tostring: unary(tostring),
-	tonumber: unary(tonumber),
-	tojson: unary(input => tojson(input)),
-	fromjson: unary(input => fromjson(assertString(input, 'fromjson'))),
-	getpath: runtimePathFunction(
-		(render, path) => values(render, [ path ], (input, value) => getpath(input, value)),
-		(render, path) => {
-			const paths = render.generator(path);
-			return function*(prefix, value, env) {
-				for (const sub of paths(value, env)) {
-					const found = getpath(value, sub);
-					yield [ [ ...prefix, ...sub as Value[] ], found ];
-				}
-			};
-		},
-	),
-	setpath: (render, path, value) => values(render, [ path, value ], (input, at, replacement) => setpath(input, at, replacement)),
-	delpaths: (render, paths) => values(render, [ paths ], (input, value) => delpaths(input, value)),
-	paths: _render => function*(input) {
-		for (const [ path ] of recursePaths([], input)) {
-			if (path.length > 0) {
+export const not = unary(input => !truthy(input));
+export const error = overload(
+	unary(input => {
+		throw new JqError(input);
+	}),
+	values((_input, value) => {
+		throw new JqError(value);
+	}),
+);
+export const length = unary(intrinsics.length);
+export const type = unary(typeOf);
+export const keys = unary(intrinsics.keys);
+export const has = values(intrinsics.has);
+export const add = unary(input => [ ...intrinsics.iterate(input) ].reduce(intrinsics.add, null));
+export const tostring = unary(tostringOf);
+export const tonumber = unary(tonumberOf);
+export const tojson = unary(input => tojsonOf(input));
+export const fromjson = unary(input => fromjsonOf(assertString(input, 'fromjson')));
+export const getpath: LibFunction = runtimePathFunction(
+	values(intrinsics.getpath),
+	(render, path) => {
+		const paths = render.generator(path);
+		return function*(prefix, value, env) {
+			for (const sub of paths(value, env)) {
+				const found = intrinsics.getpath(value, sub);
+				yield [ [ ...prefix, ...sub as Value[] ], found ];
+			}
+		};
+	},
+);
+export const setpath = values(intrinsics.setpath);
+export const delpaths = values(intrinsics.delpaths);
+export const paths: LibFunction = _render => function*(input) {
+	for (const [ path ] of intrinsics.recursePaths([], input)) {
+		if (path.length > 0) {
+			yield path;
+		}
+	}
+};
+export const to_entries = unary(toEntries);
+export const map = withFilter(filter => (input, env) => mapOver(intrinsics.iterate(input), value => filter(value, env)));
+export const recurse = withFilter(update => function*(input, env) {
+	yield* unroll(repeating(input, env, update));
+});
+export const repeat = withFilter(update => function*(input, env) {
+	yield* unroll(repeating(input, env, update));
+});
+export const until: LibFunction = (render, cond, update) => {
+	const test = render.generator(cond);
+	const step = render.generator(update);
+	return function*(input, env) {
+		yield* unroll(untilTruthy(input, env, test, step));
+	};
+};
+const whileOf: LibFunction = (render, cond, update) => {
+	const test = render.generator(cond);
+	const step = render.generator(update);
+	return function*(input, env) {
+		yield* unroll(loop(input, env, test, step));
+	};
+};
+export { whileOf as while };
+export const walk = withFilter(filter => function*(input, env) {
+	yield* walking(input, env, filter);
+});
+export const empty: LibFunction = runtimePathFunction(
+	_render => function*() {
+		yield* [];
+	},
+	_render => function*() {
+		yield* [];
+	},
+);
+export const path = withPath(paths => {
+	if (isTask(paths)) {
+		return task(function*(input, env) {
+			yield* each(paths([], input, env), function*(pair) {
+				yield pair[0];
+			});
+		});
+	} else {
+		return function*(input, env) {
+			for (const [ path ] of paths([], input, env)) {
 				yield path;
 			}
-		}
-	},
-	to_entries: unary(toEntries),
-	map: withFilter(filter => (input, env) => mapOver(iterate(input), value => filter(value, env))),
-	recurse: withFilter(update => function*(input, env) {
-		yield* unroll(repeat(input, env, update));
-	}),
-	repeat: withFilter(update => function*(input, env) {
-		yield* unroll(repeat(input, env, update));
-	}),
-	until: (render, cond, update) => {
-		const test = render.generator(cond);
-		const step = render.generator(update);
-		return function*(input, env) {
-			yield* unroll(until(input, env, test, step));
 		};
-	},
-	while: (render, cond, update) => {
-		const test = render.generator(cond);
-		const step = render.generator(update);
-		return function*(input, env) {
-			yield* unroll(loop(input, env, test, step));
-		};
-	},
-	walk: withFilter(filter => function*(input, env) {
-		yield* walk(input, env, filter);
-	}),
-	empty: runtimePathFunction(
-		_render => function*() {
-			yield* [];
-		},
-		_render => function*() {
-			yield* [];
-		},
-	),
-	path: withPath(paths => {
-		if (isTask(paths)) {
-			return task(function*(input, env) {
-				yield* each(paths([], input, env), function*(pair) {
-					yield pair[0];
-				});
-			});
-		} else {
-			return function*(input, env) {
-				for (const [ path ] of paths([], input, env)) {
-					yield path;
-				}
-			};
+	}
+});
+export const del = withPath(paths => {
+	if (isTask(paths)) {
+		return task(function*(input, env) {
+			const collected: Path[] = [];
+			yield* feed(paths([], input, env), pair => collected.push(pair[0]));
+			yield intrinsics.delpaths(input, collected);
+		});
+	} else {
+		return (input, env) => intrinsics.delpaths(input, [ ...paths([], input, env) ].map(([ path ]) => path));
+	}
+});
+export const select: LibFunction = runtimePathFunction(
+	withFilter(condition => function*(input, env) {
+		for (const test of condition(input, env)) {
+			if (truthy(test)) {
+				yield input;
+			}
 		}
 	}),
-	del: withPath(paths => {
-		if (isTask(paths)) {
-			return task(function*(input, env) {
-				const collected: Path[] = [];
-				yield* feed(paths([], input, env), pair => collected.push(pair[0]));
-				yield delpaths(input, collected);
-			});
-		} else {
-			return (input, env) => delpaths(input, [ ...paths([], input, env) ].map(([ path ]) => path));
-		}
-	}),
-	select: runtimePathFunction(
-		withFilter(condition => function*(input, env) {
-			for (const test of condition(input, env)) {
+	(render, arg) => {
+		const condition = render.generator(arg);
+		return function*(path, value, env) {
+			for (const test of condition(value, env)) {
 				if (truthy(test)) {
-					yield input;
+					yield [ path, value ];
 				}
 			}
+		};
+	},
+);
+export const first = overload(
+	unary(input => assertArray(input, 'first')[0] ?? null),
+	runtimePathFunction(
+		withFilter(filter => function*(input, env) {
+			yield* head(filter(input, env));
 		}),
 		(render, arg) => {
-			const condition = render.generator(arg);
-			return function*(path, value, env) {
-				for (const test of condition(value, env)) {
-					if (truthy(test)) {
-						yield [ path, value ];
-					}
-				}
-			};
-		},
-	),
-	first: overload(
-		unary(input => assertArray(input, 'first')[0] ?? null),
-		runtimePathFunction(
-			withFilter(filter => function*(input, env) {
-				yield* head(filter(input, env));
-			}),
-			(render, arg) => {
-				const filter = render.path(arg);
-				if (isTask(filter)) {
-					return task(function*(path, value, env) {
-						const found = yield* firstOf(filter(path, value, env));
-						if (found !== undefined) {
-							yield found;
-						}
-					});
-				} else {
-					return function*(path, value, env) {
-						yield* head(filter(path, value, env));
-					};
-				}
-			},
-		),
-	),
-	limit: runtimePathFunction(
-		(render, count, arg) => {
-			const counts = render.generator(count);
-			const filter = render.generator(arg);
-			return function*(input, env) {
-				for (const bound of counts(input, env)) {
-					yield* limited(bound, filter(input, env));
-				}
-			};
-		},
-		(render, count, arg) => {
-			const counts = render.generator(count);
 			const filter = render.path(arg);
 			if (isTask(filter)) {
 				return task(function*(path, value, env) {
-					for (const bound of counts(value, env)) {
-						yield* limitedTask(bound, filter(path, value, env));
+					const found = yield* firstOf(filter(path, value, env));
+					if (found !== undefined) {
+						yield found;
 					}
 				});
 			} else {
 				return function*(path, value, env) {
-					for (const bound of counts(value, env)) {
-						yield* limited(bound, filter(path, value, env));
-					}
+					yield* head(filter(path, value, env));
 				};
 			}
 		},
 	),
-	isempty: withFilter(filter => (input, env) => filter(input, env)[Symbol.iterator]().next().done === true),
-	range: overload(
-		(render, upto) => streams(render, [ upto ], function*(_input, end) {
-			const bound = rangeBound(end);
-			for (let ii = 0; ii < bound; ++ii) {
-				yield ii;
+);
+export const limit: LibFunction = runtimePathFunction(
+	(render, count, arg) => {
+		const counts = render.generator(count);
+		const filter = render.generator(arg);
+		return function*(input, env) {
+			for (const bound of counts(input, env)) {
+				yield* limited(bound, filter(input, env));
 			}
-		}),
-		(render, from, upto) => streams(render, [ from, upto ], function*(_input, start, end) {
-			const bound = rangeBound(end);
-			for (let ii = rangeBound(start); ii < bound; ++ii) {
-				yield ii;
-			}
-		}),
-		(render, from, upto, by) => streams(render, [ from, upto, by ], function*(_input, start, end, step) {
-			const increment = rangeBound(step);
-			const bound = rangeBound(end);
-			if (increment > 0) {
-				for (let ii = rangeBound(start); ii < bound; ii += increment) {
-					yield ii;
-				}
-			} else if (increment < 0) {
-				for (let ii = rangeBound(start); ii > bound; ii += increment) {
-					yield ii;
-				}
-			}
-		}),
-	),
-	input(this: Context, _render: Render) {
-		const { inputs } = this;
-		if (inputs.awaits) {
-			return task(function*(): Generator<Value, void, Resumed> {
-				yield pulled(yield* awaited(inputs.iterator.next()));
-			});
-		} else {
-			return () => pulled(inputs.iterator.next());
-		}
+		};
 	},
-	inputs(this: Context, _render: Render) {
-		const { inputs } = this;
-		if (inputs.awaits) {
-			return task(function*(): Generator<Value, void, Resumed> {
-				while (true) {
-					const next = yield* awaited(inputs.iterator.next());
-					if (next.done === true) {
-						return;
-					}
-					yield next.value;
+	(render, count, arg) => {
+		const counts = render.generator(count);
+		const filter = render.path(arg);
+		if (isTask(filter)) {
+			return task(function*(path, value, env) {
+				for (const bound of counts(value, env)) {
+					yield* limitedTask(bound, filter(path, value, env));
 				}
 			});
 		} else {
-			return fromIterable(() => ({ [Symbol.iterator]: () => inputs.iterator }));
+			return function*(path, value, env) {
+				for (const bound of counts(value, env)) {
+					yield* limited(bound, filter(path, value, env));
+				}
+			};
 		}
 	},
-	debug(this: Context, _render: Render) {
-		return (input: Value) => {
-			this.debug(input);
-			return input;
-		};
-	},
-	stderr(this: Context, _render: Render) {
-		return (input: Value) => {
-			this.stderr(input);
-			return input;
-		};
-	},
-	any: unary(input => [ ...iterate(input) ].some(truthy)),
-	all: unary(input => [ ...iterate(input) ].every(truthy)),
-	last: unary(input => assertArray(input, 'last').at(-1) ?? null),
-	...ordered(compare),
-	reverse: unary(input => input === null ? [] : [ ...assertArray(input, 'reverse') ].reverse()),
-	flatten: overload(
-		unary(input => flatten(input, Infinity)),
-		(render, depth) => values(render, [ depth ], (input, deep) => {
-			const levels = assertNumber(deep, 'flatten');
-			if (levels < 0) {
-				throw new JqError('flatten depth must not be negative');
+);
+export const isempty = withFilter(filter => (input, env) => filter(input, env)[Symbol.iterator]().next().done === true);
+export const range = overload(
+	(render, upto) => streams(render, [ upto ], function*(_input, end) {
+		const bound = rangeBound(end);
+		for (let ii = 0; ii < bound; ++ii) {
+			yield ii;
+		}
+	}),
+	(render, from, upto) => streams(render, [ from, upto ], function*(_input, start, end) {
+		const bound = rangeBound(end);
+		for (let ii = rangeBound(start); ii < bound; ++ii) {
+			yield ii;
+		}
+	}),
+	(render, from, upto, by) => streams(render, [ from, upto, by ], function*(_input, start, end, step) {
+		const increment = rangeBound(step);
+		const bound = rangeBound(end);
+		if (increment > 0) {
+			for (let ii = rangeBound(start); ii < bound; ii += increment) {
+				yield ii;
 			}
-			return flatten(input, levels);
-		}),
-	),
-	keys_unsorted: unary(input => {
-		if (Array.isArray(input)) {
-			return input.map((_element, ii) => ii);
-		} else if (isObject(input)) {
-			return Object.keys(input);
+		} else if (increment < 0) {
+			for (let ii = rangeBound(start); ii > bound; ii += increment) {
+				yield ii;
+			}
 		}
-		throw new JqError(`${describe(input)} has no keys`);
 	}),
-	format: (render, name) => values(render, [ name ], (input, value) => {
-		const spec = assertString(value, 'format');
-		if (!isFormat(spec)) {
-			throw new JqError(`${spec} is not a valid format`);
+);
+export function input(this: Context, _render: Render): Filter {
+	const { inputs } = this;
+	if (inputs.awaits) {
+		return task(function*(): Generator<Value, void, Resumed> {
+			yield pulled(yield* awaited(inputs.iterator.next()));
+		});
+	} else {
+		return () => pulled(inputs.iterator.next());
+	}
+}
+export function inputs(this: Context, _render: Render): Filter {
+	const { inputs } = this;
+	if (inputs.awaits) {
+		return task(function*(): Generator<Value, void, Resumed> {
+			while (true) {
+				const next = yield* awaited(inputs.iterator.next());
+				if (next.done === true) {
+					return;
+				}
+				yield next.value;
+			}
+		});
+	} else {
+		return fromIterable(() => ({ [Symbol.iterator]: () => inputs.iterator }));
+	}
+}
+export function debug(this: Context, _render: Render): Filter {
+	return (input: Value) => {
+		this.debug(input);
+		return input;
+	};
+}
+export function stderr(this: Context, _render: Render): Filter {
+	return (input: Value) => {
+		this.stderr(input);
+		return input;
+	};
+}
+export const any = unary(input => [ ...intrinsics.iterate(input) ].some(truthy));
+export const all = unary(input => [ ...intrinsics.iterate(input) ].every(truthy));
+export const last = unary(input => assertArray(input, 'last').at(-1) ?? null);
+export const { sort, sort_by, group_by, unique, unique_by, min, max, min_by, max_by, bsearch } = ordered(compare);
+export const { test, match, sub, gsub, split } = matching(regex);
+export const reverse = unary(input => input === null ? [] : [ ...assertArray(input, 'reverse') ].reverse());
+export const flatten = overload(
+	unary(input => flattened(input, Infinity)),
+	values((input, deep) => {
+		const levels = assertNumber(deep, 'flatten');
+		if (levels < 0) {
+			throw new JqError('flatten depth must not be negative');
 		}
-		return format(spec, input);
+		return flattened(input, levels);
 	}),
-	builtins(this: Context, _render: Render) {
-		return () => this.builtins();
-	},
-	input_filename: _render => () => null,
-	input_line_number: _render => () => 0,
-	have_decnum: _render => () => false,
-	have_literal_numbers: _render => () => false,
-	get_jq_origin: unary(() => {
-		throw new JqError('qfil has no module system');
-	}),
-	get_prog_origin: unary(() => {
-		throw new JqError('qfil has no module system');
-	}),
-	get_search_list: unary(() => {
-		throw new JqError('qfil has no module system');
-	}),
-	modulemeta: unary(() => {
-		throw new JqError('qfil has no module system');
-	}),
-	...dates,
-	...strings,
-	...matching(regex),
-	...math,
-	halt: _render => () => halt(0),
-	halt_error: overload(
-		unary(input => halt(5, input)),
-		(render, code) => values(render, [ code ], (input, status) => halt(assertNumber(status, 'halt_error'), input)),
-	),
-};
+);
+export const keys_unsorted = unary(input => {
+	if (Array.isArray(input)) {
+		return input.map((_element, ii) => ii);
+	} else if (isObject(input)) {
+		return Object.keys(input);
+	}
+	throw new JqError(`${describe(input)} has no keys`);
+});
+export const format = values((input, value) => {
+	const spec = assertString(value, 'format');
+	if (!intrinsics.isFormat(spec)) {
+		throw new JqError(`${spec} is not a valid format`);
+	}
+	return intrinsics.format(spec, input);
+});
+export function builtins(this: Context, _render: Render): Filter {
+	return () => this.builtins();
+}
+export const input_filename: LibFunction = _render => () => null;
+export const input_line_number: LibFunction = _render => () => 0;
+export const have_decnum: LibFunction = _render => () => false;
+export const have_literal_numbers: LibFunction = _render => () => false;
+export const get_jq_origin = unary(() => {
+	throw new JqError('qfil has no module system');
+});
+export const get_prog_origin = unary(() => {
+	throw new JqError('qfil has no module system');
+});
+export const get_search_list = unary(() => {
+	throw new JqError('qfil has no module system');
+});
+export const modulemeta = unary(() => {
+	throw new JqError('qfil has no module system');
+});
+export const halt: LibFunction = _render => () => intrinsics.halt(0);
+export const halt_error = overload(
+	unary(input => intrinsics.halt(5, input)),
+	values((input, status) => intrinsics.halt(assertNumber(status, 'halt_error'), input)),
+);

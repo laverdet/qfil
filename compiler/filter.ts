@@ -772,9 +772,18 @@ export function combineStreams(filters: readonly Filter[], body: (values: Value[
 	}
 }
 
-/** A library function of values: each argument evaluated, the call made once per combination. */
-export function values(render: Render, args: readonly ast.Node[], body: (input: Value, ...args: Value[]) => Value): Filter {
-	return combine(args.map(arg => render.filter(arg)), (vals, input) => body(input, ...vals));
+/**
+ * A library function of values: each argument evaluated as jq's `$` parameters are, the body run
+ * once per combination — the input, then one value per argument. The arity is read off the body:
+ * the input plus its arguments is one parameter more than the arity, exactly as `render` plus the
+ * argument syntax is for a `LibFunction`. The common arities return functions of exactly those
+ * parameters, whose `length` is natural and whose bodies call without a spread; past them, the
+ * body's `length` is written onto a variadic wrapper.
+ */
+export function values(body: (input: Value, ...args: Value[]) => Value): LibFunction {
+	const fn: LibFunction = (render, ...args) =>
+		combine(args.map(arg => render.filter(arg)), (vals, input) => body(input, ...vals));
+	return Object.defineProperty(fn, 'length', { value: body.length });
 }
 
 /** As `values`, for a body that yields. */

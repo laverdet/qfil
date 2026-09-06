@@ -4,10 +4,10 @@
  * seconds carrying any fraction. `gmtime`, `mktime` and `strftime` speak UTC; `localtime` and
  * `strflocaltime` ask the host. `%s` reads the array as UTC, where C would consult the timezone.
  */
-import type { Lib, LibFunction, Value } from '#/compiler/filter.js';
+import type { LibFunction, Value } from '#/compiler/filter.js';
 import { values } from '#/compiler/filter.js';
-import { assertNumber, assertString, unary } from '#/runtime/js/library.js';
-import { JqError, describe, isNumber } from '#/runtime/js/value.js';
+import { assertNumber, assertString, unary } from '#/runtime/lang/library.js';
+import { JqError, describe, isNumber } from '#/runtime/lang/value.js';
 
 const days = [ 'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday' ];
 const months = [ 'January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December' ];
@@ -233,7 +233,7 @@ function finish(tm: { year: number; mon: number; day: number; hh: number; mm: nu
 
 /** `strftime` and `strflocaltime`: an epoch second is broken down first; an array is taken as one. */
 function formatter(local: boolean): LibFunction {
-	return (render, format) => values(render, [ format ], (input, spec) => {
+	return values((input, spec) => {
 		const text = assertString(spec, 'strftime');
 		const tm = isNumber(input) ? broken(Number(input), local) : brokenOf(input);
 		return strftimeOf(text, tm, local);
@@ -247,13 +247,10 @@ function brokenOf(value: Value): number[] {
 	return value.map(Number);
 }
 
-export const dates: Lib = {
-	now: _render => () => Date.now() / 1000,
-	mktime: unary(epochOf),
-	gmtime: unary(input => broken(assertNumber(input, 'gmtime'), false)),
-	localtime: unary(input => broken(assertNumber(input, 'localtime'), true)),
-	strftime: formatter(false),
-	strflocaltime: formatter(true),
-	strptime: (render, format) => values(render, [ format ], (input, spec) =>
-		strptimeOf(assertString(input, 'strptime'), assertString(spec, 'strptime'))),
-};
+export const mktime = unary(epochOf);
+export const gmtime = unary(input => broken(assertNumber(input, 'gmtime'), false));
+export const localtime = unary(input => broken(assertNumber(input, 'localtime'), true));
+export const strftime = formatter(false);
+export const strflocaltime = formatter(true);
+export const strptime = values((input, spec) =>
+	strptimeOf(assertString(input, 'strptime'), assertString(spec, 'strptime')));

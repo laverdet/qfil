@@ -3,9 +3,9 @@
  * extended dialect rewritten, and group names read off the pattern source so an unmatched
  * capture still carries its name.
  */
-import type { RegexCompiler } from '#/runtime/js/regexp.js';
-import { execAll, ignoringEmpty, matchObject, regex, regexFunction } from '#/runtime/js/regexp.js';
-import { JqError } from '#/runtime/js/value.js';
+import type { RegexCompiler } from '#/runtime/lang/regexp.js';
+import { execAll, ignoringEmpty, matchObject, regex, regexFunction } from '#/runtime/lang/regexp.js';
+import { JqError } from '#/runtime/lang/value.js';
 
 /**
  * An extended pattern, the `x` flag: whitespace and `#` comments are ignored outside a character

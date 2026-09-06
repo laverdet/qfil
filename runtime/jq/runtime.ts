@@ -1,25 +1,27 @@
 /**
- * A runtime that is jq, numbers and order included: the JavaScript runtime with what differs laid
- * over it — a number literal keeps its spelling, negation keeps it too, and `<` and its kin use
- * jq's total order. Everything else is the JavaScript runtime's, which is the point: a runtime is
- * a value, and another one is a spread away.
+ * A runtime that is jq, numbers and order included: the JavaScript runtime re-exported with what
+ * differs declared over it — a number literal keeps its spelling, negation keeps it too, and `<`
+ * and its kin use jq's total order. Everything else is the JavaScript runtime's, which is the
+ * point: a runtime is a module, and another one is an `export *` away.
  */
 import type * as ast from '#/compiler/ast.js';
-import type { Runtime, Value } from '#/compiler/filter.js';
-import { prelude } from './prelude.js';
+import type { Handler, Value } from '#/compiler/filter.js';
 import { Spelled, compare, spelled } from './value.js';
 import { combine } from '#/compiler/filter.js';
-import { negate as negateNumber } from '#/runtime/js/intrinsics.js';
-import { binary, runtime as js, operators, sliceOver } from '#/runtime/js/runtime.js';
-import { JqError, describe, isNumber } from '#/runtime/js/value.js';
+import { negate as negateNumber } from '#/runtime/lang/intrinsics.js';
+import { binaryOver, operators, sliceOver } from '#/runtime/lang/runtime.js';
+import { JqError, describe, isNumber } from '#/runtime/lang/value.js';
+
+export * from '#/runtime/js/runtime.js';
+export { prelude } from './prelude.js';
 
 /** A literal's value: a number keeps how it was written. */
-function literal(node: ast.Literal): Value {
+function literalOf(node: ast.Literal): Value {
 	return typeof node.value === 'number' && node.text !== undefined ? spelled(node.value, node.text) : node.value;
 }
 
 /** Negation keeps the spelling, sign flipped. */
-function negate(value: Value): Value {
+function negated(value: Value): Value {
 	if (value instanceof Spelled) {
 		const { text } = value;
 		return spelled(-Number(value), text.startsWith('-') ? text.slice(1) : `-${text}`);
@@ -63,18 +65,14 @@ function modulo(left: Value, right: Value): Value {
 	return Number(intmax(left) % divisor);
 }
 
-export const runtime: Runtime = {
-	...js,
-	prelude,
-	literal: {
-		value: node => {
-			const value = literal(node);
-			return () => value;
-		},
+export const literal: Handler<ast.Literal> = {
+	value: node => {
+		const value = literalOf(node);
+		return () => value;
 	},
-	negate: {
-		value: (node, render) => combine([ render.filter(node.operand) ], ([ value ]) => negate(value!)),
-	},
-	binary: binary({ ...operators(compare), '%': modulo }),
-	slice: sliceOver(unbounded),
 };
+export const negate: Handler<ast.Negate> = {
+	value: (node, render) => combine([ render.filter(node.operand) ], ([ value ]) => negated(value!)),
+};
+export const binary = binaryOver({ ...operators(compare), '%': modulo });
+export const slice = sliceOver(unbounded);

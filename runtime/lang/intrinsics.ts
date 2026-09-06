@@ -1,7 +1,7 @@
 /**
  * The operations on values: field access, indexing, iteration, the operators, paths and the
- * `@format`s. The runtime (`runtime.ts`) gives the language's constructs their meaning in terms of
- * these; the library (`index.ts`) is built on them too. Nothing here knows about syntax.
+ * `@format`s. The runtimes give the language's constructs their meaning in terms of these, and
+ * the libraries are built on them too. Nothing here knows about syntax.
  */
 import type { Path, Value, ValueObject } from '#/compiler/filter.js';
 import { Halt, JqError, compareStrings, copyObject, describe, equal, isNumber, isObject, newObject, tojson, tostring, typeOf } from './value.js';

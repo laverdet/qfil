@@ -13,12 +13,12 @@ import * as process from 'node:process';
 import { instantiate } from './compiler/compiler.js';
 import { arities } from './compiler/filter.js';
 import { parse } from './compiler/parser.js';
-import { tojson } from './runtime/js/value.js';
+import { tojson } from './runtime/lang/value.js';
 
 export type { Context, Env, Filter as LibFilter, Handled, Handler, Lib, LibFunction, Path, PathFilter, Render, Resumed, Runtime, Stream, Value, ValueObject } from './compiler/filter.js';
 export { Await, Bounce, Break, CompileError, Tail, abreast, awaited, combine, combineStreams, constant, driven, each, feed, generator, isStream, isTask, once, over, overload, pathForm, promises, runtimePathFunction, settle, streams, task, unrolled, values } from './compiler/filter.js';
 export { ParseError, definitions, parse } from './compiler/parser.js';
-export { Halt, JqError } from './runtime/js/value.js';
+export { Halt, JqError } from './runtime/lang/value.js';
 
 export interface RunOptions {
 	/** The library of named functions: `lib` of `runtime/js`, or one laid over it. */

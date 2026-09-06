@@ -6,8 +6,8 @@ import * as path from 'node:path';
 import process from 'node:process';
 import { describe, it } from 'node:test';
 import { differential } from './harness.js';
-import { lib as jqLib } from '#/runtime/jq/index.js';
-import { runtime as jqRuntime } from '#/runtime/jq/runtime.js';
+import * as jqLib from '#/runtime/jq/index.js';
+import * as jqRuntime from '#/runtime/jq/runtime.js';
 import { fromjson as jqFromjson } from '#/runtime/jq/value.js';
 
 const { agree, agreeText, divergent, run } = differential({ runtime: jqRuntime, lib: jqLib }, jqFromjson);

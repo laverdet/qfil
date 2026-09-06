@@ -4,11 +4,10 @@
  * JavaScript telling — the Bessel functions, `erf` — refuses by name. A transcendental's last
  * digit may differ from a libm's; that is within the aim.
  */
-import type { Lib } from '#/compiler/filter.js';
+import type { LibFunction } from '#/compiler/filter.js';
 import { values } from '#/compiler/filter.js';
-import { assertNumber, unary } from '#/runtime/js/library.js';
-import { tabled, tabled2 } from '#/runtime/js/math.js';
-import { JqError } from '#/runtime/js/value.js';
+import { assertNumber, tabled, tabled2, unary } from '#/runtime/lang/library.js';
+import { JqError } from '#/runtime/lang/value.js';
 
 const view = new DataView(new ArrayBuffer(8));
 
@@ -26,7 +25,7 @@ function halfEven(value: number): number {
 }
 
 /** The fraction in [0.5, 1) and the exponent, read off the bits so nothing rounds. */
-function frexp(value: number): [ number, number ] {
+function frexpOf(value: number): [ number, number ] {
 	if (value === 0 || !Number.isFinite(value)) {
 		return [ value, 0 ];
 	}
@@ -44,11 +43,11 @@ function frexp(value: number): [ number, number ] {
 	return [ view.getFloat64(0), exponent - 1022 ];
 }
 
-function logb(value: number): number {
+function logbOf(value: number): number {
 	if (value === 0) {
 		return -Infinity;
 	} else if (Number.isFinite(value)) {
-		return frexp(value)[1] - 1;
+		return frexpOf(value)[1] - 1;
 	} else {
 		return Math.abs(value);
 	}
@@ -80,7 +79,7 @@ function lanczosParts(value: number): { readonly sum: number; readonly tail: num
 	return { sum, tail: shifted + 7.5 };
 }
 
-function tgamma(value: number): number {
+function tgammaOf(value: number): number {
 	if (Number.isInteger(value)) {
 		if (value > 0) {
 			return value <= 171 ? factorial(value - 1) : Infinity;
@@ -89,17 +88,17 @@ function tgamma(value: number): number {
 		}
 	} else if (value < 0.5) {
 		// Reflection: Γ(x)Γ(1-x) = π / sin(πx)
-		return Math.PI / (Math.sin(Math.PI * value) * tgamma(1 - value));
+		return Math.PI / (Math.sin(Math.PI * value) * tgammaOf(1 - value));
 	}
 	const { sum, tail } = lanczosParts(value);
 	return Math.sqrt(2 * Math.PI) * tail ** (value - 0.5) * Math.exp(-tail) * sum;
 }
 
-function lgamma(value: number): number {
+function lgammaOf(value: number): number {
 	if (Number.isInteger(value) && value > 0 && value <= 171) {
 		return Math.log(factorial(value - 1));
 	} else if (value < 0.5) {
-		return Math.log(Math.PI / Math.abs(Math.sin(Math.PI * value))) - lgamma(1 - value);
+		return Math.log(Math.PI / Math.abs(Math.sin(Math.PI * value))) - lgammaOf(1 - value);
 	}
 	const { sum, tail } = lanczosParts(value);
 	return 0.5 * Math.log(2 * Math.PI) + (value - 0.5) * Math.log(tail) - tail + Math.log(sum);
@@ -126,7 +125,7 @@ function extremum(left: number, right: number, pick: (left: number, right: numbe
 }
 
 /** IEEE remainder: the quotient rounds to the nearest integer, ties to even. */
-function remainder(left: number, right: number): number {
+function remainderOf(left: number, right: number): number {
 	return left - halfEven(left / right) * right;
 }
 
@@ -138,7 +137,7 @@ function scale(value: number, exponent: number): number {
 }
 
 /** The next double after the value toward the target, one bit away. */
-function nextafter(value: number, target: number): number {
+function nextafterOf(value: number, target: number): number {
 	if (Number.isNaN(value) || Number.isNaN(target)) {
 		return NaN;
 	} else if (value === target) {
@@ -153,34 +152,34 @@ function nextafter(value: number, target: number): number {
 }
 
 /** The functions of the input alone. */
-const unaryOf: Readonly<Record<string, (value: number) => number>> = {
+const unaryOf = {
 	exp2: value => 2 ** value,
 	exp10: value => 10 ** value,
 	// jq's `gamma` is the log-gamma, as C's historical one was
-	gamma: lgamma,
-	lgamma,
-	logb,
+	gamma: lgammaOf,
+	lgamma: lgammaOf,
+	logb: logbOf,
 	nearbyint: halfEven,
 	rint: halfEven,
-	significand: value => frexp(value)[0] * 2,
-	tgamma,
-};
+	significand: value => frexpOf(value)[0] * 2,
+	tgamma: tgammaOf,
+} satisfies Readonly<Record<string, (value: number) => number>>;
 
 /** The functions of two arguments; the input plays no part, as jq has it. */
-const binaryOf: Readonly<Record<string, (left: number, right: number) => number>> = {
+const binaryOf = {
 	copysign: (value, sign) => sign < 0 || Object.is(sign, -0) ? -Math.abs(value) : Math.abs(value),
-	drem: remainder,
+	drem: remainderOf,
 	fdim: (left, right) => Math.max(left - right, 0),
 	fmax: (left, right) => extremum(left, right, Math.max),
 	fmin: (left, right) => extremum(left, right, Math.min),
 	fmod: (left, right) => left % right,
 	ldexp: scale,
-	nextafter,
-	nexttoward: nextafter,
-	remainder,
+	nextafter: nextafterOf,
+	nexttoward: nextafterOf,
+	remainder: remainderOf,
 	scalb: scale,
 	scalbln: scale,
-};
+} satisfies Readonly<Record<string, (left: number, right: number) => number>>;
 
 /** The functions with no reasonable JavaScript telling refuse by name. */
 function unsupported(name: string): () => never {
@@ -189,27 +188,25 @@ function unsupported(name: string): () => never {
 	};
 }
 
-export const math: Lib = {
-	...tabled(unaryOf),
-	...tabled2(binaryOf),
-	frexp: unary(input => frexp(assertNumber(input, 'frexp'))),
-	modf: unary(input => {
-		const value = assertNumber(input, 'modf');
-		const whole = Math.trunc(value);
-		return [ value - whole, whole ];
-	}),
-	lgamma_r: unary(input => {
-		const value = assertNumber(input, 'lgamma_r');
-		return [ lgamma(value), gammaSign(value) ];
-	}),
-	fma: (render, first, second, third) => values(render, [ first, second, third ], (_input, factor, multiplier, addend) =>
-		assertNumber(factor, 'fma') * assertNumber(multiplier, 'fma') + assertNumber(addend, 'fma')),
-	j0: unary(unsupported('j0')),
-	j1: unary(unsupported('j1')),
-	y0: unary(unsupported('y0')),
-	y1: unary(unsupported('y1')),
-	erf: unary(unsupported('erf')),
-	erfc: unary(unsupported('erfc')),
-	jn: (_render, _n, _x) => unsupported('jn'),
-	yn: (_render, _n, _x) => unsupported('yn'),
-};
+export const { exp2, exp10, gamma, lgamma, logb, nearbyint, rint, significand, tgamma } = tabled(unaryOf);
+export const { copysign, drem, fdim, fmax, fmin, fmod, ldexp, nextafter, nexttoward, remainder, scalb, scalbln } = tabled2(binaryOf);
+export const frexp = unary(input => frexpOf(assertNumber(input, 'frexp')));
+export const modf = unary(input => {
+	const value = assertNumber(input, 'modf');
+	const whole = Math.trunc(value);
+	return [ value - whole, whole ];
+});
+export const lgamma_r = unary(input => {
+	const value = assertNumber(input, 'lgamma_r');
+	return [ lgammaOf(value), gammaSign(value) ];
+});
+export const fma = values((_input, factor, multiplier, addend) =>
+	assertNumber(factor, 'fma') * assertNumber(multiplier, 'fma') + assertNumber(addend, 'fma'));
+export const j0 = unary(unsupported('j0'));
+export const j1 = unary(unsupported('j1'));
+export const y0 = unary(unsupported('y0'));
+export const y1 = unary(unsupported('y1'));
+export const erf = unary(unsupported('erf'));
+export const erfc = unary(unsupported('erfc'));
+export const jn: LibFunction = (_render, _n, _x) => unsupported('jn');
+export const yn: LibFunction = (_render, _n, _x) => unsupported('yn');

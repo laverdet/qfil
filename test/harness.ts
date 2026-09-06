@@ -10,7 +10,7 @@ import * as assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { describe, it } from 'node:test';
 import { compile as compileWith, run as runWith } from '#/index.js';
-import { tojson } from '#/runtime/js/value.js';
+import { tojson } from '#/runtime/lang/value.js';
 
 export type Case = readonly [ filter: string, input?: Value, inputs?: readonly Value[] ];
 

@@ -1,7 +1,7 @@
 /** The language, case by case against the `jq` binary — with the departures `divergent` documents. */
 import { differential } from './harness.js';
-import { lib } from '#/runtime/js/index.js';
-import { runtime } from '#/runtime/js/runtime.js';
+import * as lib from '#/runtime/js/index.js';
+import * as runtime from '#/runtime/js/runtime.js';
 
 const { agree, divergent } = differential({ runtime, lib });
 

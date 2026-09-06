@@ -11,12 +11,12 @@ import * as fs from 'node:fs';
 import process from 'node:process';
 import * as readline from 'node:readline';
 import { Readable } from 'node:stream';
-import { lib as jqLib } from 'qfil/runtime/jq/index.js';
-import { runtime as jqRuntime } from 'qfil/runtime/jq/runtime.js';
+import * as jqLib from 'qfil/runtime/jq/index.js';
+import * as jqRuntime from 'qfil/runtime/jq/runtime.js';
 import { fromjson as jqFromjson } from 'qfil/runtime/jq/value.js';
-import { lib as jsLib } from 'qfil/runtime/js/index.js';
-import { runtime as jsRuntime } from 'qfil/runtime/js/runtime.js';
-import { fromjson as jsFromjson } from 'qfil/runtime/js/value.js';
+import * as jsLib from 'qfil/runtime/js/index.js';
+import * as jsRuntime from 'qfil/runtime/js/runtime.js';
+import { fromjson as jsFromjson } from 'qfil/runtime/lang/value.js';
 import { execute } from './cli.js';
 
 const USAGE = `usage: jsjq [options] <filter> [file...]

@@ -10,7 +10,7 @@ import * as util from 'node:util';
 import { CompileError } from 'qfil/compiler/filter.js';
 import { ParseError } from 'qfil/compiler/parser.js';
 import { compile } from 'qfil/index.js';
-import { Halt, JqError, compareStrings, isObject, newObject, tojson } from 'qfil/runtime/js/value.js';
+import { Halt, JqError, compareStrings, isObject, newObject, tojson } from 'qfil/runtime/lang/value.js';
 
 export type Flags = Readonly<Record<string, string | boolean | undefined>>;
 

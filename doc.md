@@ -101,7 +101,7 @@ for the same syntax.
 
 ### Library functions receive syntax
 
-A library function (`runtime/js/index.ts`, keyed by name) is called the same way, with a `Render` and the
+A library function (`runtime/js/index.ts`, one export per name) is called the same way, with a `Render` and the
 syntax of its arguments, and returns the filter of the call. Its parameters are `render` and then one
 per argument, so a call is checked against its `length`; one name serves every arity, and `range`
 is an `overload` of three implementations, told apart by how many parameters each declares. What an argument *is* is the
@@ -150,7 +150,8 @@ copies each container the first time a path passes through it and writes in plac
 
 ### Another runtime
 
-`runtime/jq` is the JavaScript runtime with what differs laid over it: a `literal` handler that
+`runtime/jq` is the JavaScript runtime re-exported (`export *`) with what differs declared over
+it — a local export shadows what the star would re-export: a `literal` handler that
 keeps a number's spelling, a `negate` that keeps it too, `binary` over jq's total order, and the
 library with `sort` and its kin over that order (`ordered`) and `tonumber`/`fromjson` keeping
 spellings. `fromjson` — which also reads the jq flavour's input — is parsed by hand: numbers are
@@ -257,17 +258,20 @@ only calls into a recursion pay for any of this; everything else compiles as bef
   with, the task machinery (`Await`, `each`, `driven`), and the tail-call machinery (`Bounce`,
   `Tail`, `settle`, `unrolled`).
   Nothing under `compiler/` depends on a particular runtime.
-- `runtime/js/runtime.ts` — the JavaScript runtime: a handler per kind of node, jq's semantics in
-  JavaScript, and `invalidPath`, what a value is where a path expression was needed.
-- `runtime/js/index.ts` — the JavaScript library, keyed by name: the core functions, assembled
-  with `strings.ts`, `math.ts` and `regexp.ts` over `library.ts`, what a function is built from;
+- `runtime/lang/` — what every flavour shares: `value.ts` (equality, JSON, `JqError`; ordering is
+  a flavour's own), `intrinsics.ts` (the operations on values: indexing, arithmetic, paths, the
+  `Editor`, formats), `library.ts` (what a library function is built from), and the makers a
+  flavour instantiates with its own ordering and regex reading — `order.ts` (`ordered`),
+  `regexp.ts` (`matching` over a `RegexCompiler`), `runtime.ts` (`operators`, `binaryOver`,
+  `sliceOver`).
+- `runtime/js/runtime.ts` — the JavaScript runtime: a handler per kind of node, each a direct
+  export, so the module's namespace object — `import * as runtime` — is the runtime itself.
+- `runtime/js/index.ts` — the JavaScript library on the same scheme, one export per name, with
+  `strings.ts`, `math.ts` and `date.ts` star-re-exported; `value.ts` — JavaScript's ordering;
   `prelude.ts` — the builtins defined in the language itself.
-- `runtime/js/intrinsics.ts` — the operations on values: indexing, arithmetic, paths, the
-  `Editor`, formats.
-- `runtime/js/value.ts` — comparison, equality and JSON conversion over the contract's values.
 - `runtime/jq/` — jq's numbers and order: spelled numbers as boxed `Number`s, canonical spelling,
   jq's total order, the C-extended mathematics (`math.ts`) and time dialect (`date.ts`), and the
-  runtime and library laid over the JavaScript ones.
+  runtime and library re-exporting the JavaScript ones with local overrides.
 - `runtime/fs/` — the filesystem as values: branded stat objects, and traversal (`.[]`, `..`)
   laid over the JavaScript runtime.
 - `index.ts` — `compile`, `run`, `parse`; `bin/jsjq.ts` and `bin/fq.ts` — the binaries, over

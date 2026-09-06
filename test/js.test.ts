@@ -7,9 +7,9 @@ import * as assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { differential } from './harness.js';
 import { CompileError, JqError, constant, overload, promises, values } from '#/index.js';
-import { lib } from '#/runtime/js/index.js';
-import { runtime } from '#/runtime/js/runtime.js';
-import { tojson } from '#/runtime/js/value.js';
+import * as lib from '#/runtime/js/index.js';
+import * as runtime from '#/runtime/js/runtime.js';
+import { tojson } from '#/runtime/lang/value.js';
 
 const { compile, divergent, run } = differential({ runtime, lib });
 
@@ -83,11 +83,15 @@ describe('compiled shape', () => {
 			},
 			// A function that reads its argument's syntax: a literal is folded at instantiation
 			plus: overload(
-				(render, arg) => {
+				function(render, arg) {
 					const amount = constant(arg);
-					return amount === undefined ? values(render, [ arg ], (input, added) => (input as number) + (added as number)) : (input: Value) => (input as number) + (amount as number);
+					if (amount === undefined) {
+						return values((input, added) => (input as number) + (added as number)).call(this, render, arg);
+					} else {
+						return input => (input as number) + (amount as number);
+					}
 				},
-				(render, left, right) => values(render, [ left, right ], (input, first, second) => (input as number) + (first as number) + (second as number)),
+				values((input, first, second) => (input as number) + (first as number) + (second as number)),
 			),
 		};
 		assert.deepEqual(run('double, twice(. + 1), length, plus(1), plus(. * 2), plus(1; 2)', 2, { lib: custom }), [ 4, 3, 3, 2, 3, 6, 5 ]);

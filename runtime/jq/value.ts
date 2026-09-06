@@ -9,8 +9,8 @@
  * number. Nothing over there is any the wiser.
  */
 import type { Value, ValueObject } from '#/compiler/filter.js';
-import type { ValueType } from '#/runtime/js/value.js';
-import { JqError, compareStrings, newObject, tonumber as tonumberOf, typeOf } from '#/runtime/js/value.js';
+import type { ValueType } from '#/runtime/lang/value.js';
+import { JqError, compareStrings, newObject, tonumber as tonumberOf, typeOf } from '#/runtime/lang/value.js';
 
 /**
  * A number that remembers how it was spelled; a `Number` in every other respect. Only a decimal
