@@ -1,5 +1,5 @@
 /**
- * Handler makers shared by the runtimes, each over what is a flavour's to say: the binary
+ * Handler makers shared by the runtimes, each over what is a flavor's to say: the binary
  * operators over an ordering, the slice handler over a reading of its bounds, and the constructs
  * that ask whether a value is true — `if`, `and`, `or`, `//`, `//=` — over a truthiness.
  * Arithmetic, equality and the shape of a path are not up for debate.

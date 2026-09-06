@@ -46,9 +46,9 @@ implementation deliberately differs:
   `{"1":2,"b":1}`). Every object the language makes has a null prototype, so `__proto__` is an
   ordinary key.
 - Error messages approximate jq's; `try … catch .` sees a message of the same general form.
-- The jq flavour's library covers jq 1.8's builtins; the JavaScript runtime's carries what
+- The jq flavor's library covers jq 1.8's builtins; the JavaScript runtime's carries what
   `Math` speaks, and the C-extended tail — `frexp`, `ldexp`, `nearbyint`, the gamma family — is
-  the jq flavour's own, as is the broken-down dialect — `gmtime`, `mktime`, `strftime`,
+  the jq flavor's own, as is the broken-down dialect — `gmtime`, `mktime`, `strftime`,
   `strptime` — and the iso8601 aliases. The JavaScript runtime tells `now` as the epoch second,
   and `todate` and `fromdate` speak ISO-8601 UTC through `Date`: milliseconds written, fractional
   seconds read. The edges of C are left honest: the Bessel functions and
@@ -160,7 +160,7 @@ copies each container the first time a path passes through it and writes in plac
 it — a local export shadows what the star would re-export: a `literal` handler that
 keeps a number's spelling, a `negate` that keeps it too, `binary` over jq's total order, and the
 library with `sort` and its kin over that order (`ordered`) and `tonumber`/`fromjson` keeping
-spellings. `fromjson` — which also reads the jq flavour's input — is parsed by hand: numbers are
+spellings. `fromjson` — which also reads the jq flavor's input — is parsed by hand: numbers are
 scanned as leniently as jq's own scanner reads C doubles (`01`, `+1`, `5.`, `nan`, `Infinity` in
 any case), and a number that is already spelled canonically is never boxed. A spelled number is a
 boxed `Number` that remembers its text, so JavaScript itself does
@@ -209,8 +209,8 @@ it — the promises it starts, the inputs it reads — which is the point.
 Inputs may arrive asynchronously: `RunOptions.inputs` takes an `AsyncIterable` as readily as an
 `Iterable`, and `input` and `inputs` are then tasks — a program reading them awaits, one that
 never asks keeps its sync shape. The `qfil` binary reads standard input this way, streaming: the
-jq flavour scans concatenated JSON values cumulatively and yields each as its text completes, the
-JavaScript flavour reads JSON Lines, and `-R` reads lines; nothing waits for the input to end.
+jq flavor scans concatenated JSON values cumulatively and yields each as its text completes, the
+JavaScript flavor reads JSON Lines, and `-R` reads lines; nothing waits for the input to end.
 
 ### The prelude
 
@@ -221,7 +221,7 @@ when a program first compiles against it and never again — `abs`, `map_values`
 as if the program began with them; its own definitions shadow them as inner scopes do. The source
 is parsed once per process, and a definition's body is rendered only when a program first calls
 it, so an unused builtin costs its binding alone. A runtime laid over another inherits its prelude
-by the same spread as everything else — or composes its own, as the jq flavour lays the date
+by the same spread as everything else — or composes its own, as the jq flavor lays the date
 family over the JavaScript prelude — and the definitions take on the new runtime's semantics
 unrewritten: `abs` compares with jq's order under the jq runtime because `<` does.
 
@@ -264,10 +264,10 @@ only calls into a recursion pay for any of this; everything else compiles as bef
   with, the task machinery (`Await`, `each`, `driven`), and the tail-call machinery (`Bounce`,
   `Tail`, `settle`, `unrolled`).
   Nothing under `compiler/` depends on a particular runtime.
-- `runtime/lang/` — what every flavour shares: `value.ts` (equality, JSON, `JqError`; ordering is
-  a flavour's own), `intrinsics.ts` (the operations on values: indexing, arithmetic, paths, the
+- `runtime/lang/` — what every flavor shares: `value.ts` (equality, JSON, `JqError`; ordering is
+  a flavor's own), `intrinsics.ts` (the operations on values: indexing, arithmetic, paths, the
   `Editor`, formats), `library.ts` (what a library function is built from), and the makers a
-  flavour instantiates with its own ordering, truthiness and regex reading — `order.ts`
+  flavor instantiates with its own ordering, truthiness and regex reading — `order.ts`
   (`ordered`), `truth.ts` (`conditionals`), `regexp.ts` (`matching` over a `RegexCompiler`),
   `recur.ts` (recursion as data), and `runtime.ts` (`operators`, `binaryOver`, `sliceOver`, and
   the truthiness-taking `ifOver`, `logicalOver`, `alternativeOver`, `assignOver`).

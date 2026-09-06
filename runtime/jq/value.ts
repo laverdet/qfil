@@ -60,7 +60,7 @@ function canonical(text: string): string {
 /** A number with its spelling, when that says more than the number does. */
 export function spelled(value: number, text: string): Value {
 	const written = canonical(text);
-	// A boxed number is a `Value` in behaviour; the contract's type cannot spell it
+	// A boxed number is a `Value` in behavior; the contract's type cannot spell it
 	return written === String(value) ? value : new Spelled(value, written) as unknown as Value;
 }
 

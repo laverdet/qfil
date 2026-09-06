@@ -1,7 +1,7 @@
 /**
  * Numbers: the mathematical functions JavaScript itself speaks — the `Math` namespace, with C's
  * rounding kept for `round` — and the number predicates. The C library's extended tail (`frexp`,
- * `ldexp`, the gamma family, `nearbyint` and kin) is the jq flavour's own, in `runtime/jq/math.ts`.
+ * `ldexp`, the gamma family, `nearbyint` and kin) is the jq flavor's own, in `runtime/jq/math.ts`.
  */
 import type { LibFunction } from '#/compiler/filter.js';
 import { assertNumber, tabled, tabled2, unary } from '#/runtime/lang/library.js';

@@ -1,5 +1,5 @@
 /**
- * The library over jq's values: everything the JavaScript flavour exports, with what differs
+ * The library over jq's values: everything the JavaScript flavor exports, with what differs
  * declared over it — `sort` and its kin in jq's order, `tonumber` and `fromjson` keeping a
  * number's spelling, and the matching functions reading a regex's flags as jq does. A local
  * export shadows what `export *` would re-export, which is all the laying-over there is.

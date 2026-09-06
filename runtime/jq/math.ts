@@ -1,5 +1,5 @@
 /**
- * The C library's extended mathematics, the jq flavour's own: rounding to even, the bits of a
+ * The C library's extended mathematics, the jq flavor's own: rounding to even, the bits of a
  * double, the gamma family by Lanczos, and the scaling functions. What has no reasonable
  * JavaScript telling — the Bessel functions, `erf` — refuses by name. A transcendental's last
  * digit may differ from a libm's; that is within the aim.

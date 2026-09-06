@@ -1,5 +1,5 @@
 /**
- * The JavaScript flavour: doubles and their formatting, UTF-16 strings, and JavaScript's truth,
+ * The JavaScript flavor: doubles and their formatting, UTF-16 strings, and JavaScript's truth,
  * order and regex where jq's binary speaks C's.
  */
 import * as assert from 'node:assert/strict';
@@ -39,7 +39,7 @@ divergent('regular expressions are JavaScript\'s', [
 	// Offsets and lengths count UTF-16 code units
 	[ '[match("😀a"; "g") | .offset, .length]', 'x😀a😀a', [ [ 1, 3, 4, 3 ] ] ],
 	// An unmatched group has no name in the JavaScript reading, so `capture` drops it; the jq
-	// flavour reads names off the pattern source and keeps it
+	// flavor reads names off the pattern source and keeps it
 	[ '"b" | capture("(?<x>a)?b?")', null, [ {} ] ],
 	[ '"b" | capture("(?<x>a?)?b?")', null, [ {} ] ],
 ]);

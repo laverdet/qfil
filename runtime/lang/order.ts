@@ -1,7 +1,7 @@
 /**
  * The functions that put values in order — `sort`, `sort_by`, `group_by`, `unique`, `min`, `max`
  * and their `_by` kin, `bsearch` — over a comparison, since what the order is depends on the
- * flavour: JavaScript's in `runtime/js`, jq's total order in `runtime/jq`. The keys of `sort_by`
+ * flavor: JavaScript's in `runtime/js`, jq's total order in `runtime/jq`. The keys of `sort_by`
  * and `group_by` are `[f]` of each value, compared element by element.
  */
 import type { Env, Stream, Value } from '#/compiler/filter.js';

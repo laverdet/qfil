@@ -47,9 +47,9 @@ const lines = (source: Readable): AsyncIterable<string> =>
 
 /**
  * The runtimes a filter can run with, each with how its inputs come off the input stream:
- * concatenated JSON values for the jq flavour, JSON Lines for JavaScript's.
+ * concatenated JSON values for the jq flavor, JSON Lines for JavaScript's.
  */
-const flavours: Readonly<Record<string, { readonly options: Pick<RunOptions, 'lib' | 'runtime'>; readonly values: (source: Readable) => AsyncIterable<Value> }>> = {
+const flavors: Readonly<Record<string, { readonly options: Pick<RunOptions, 'lib' | 'runtime'>; readonly values: (source: Readable) => AsyncIterable<Value> }>> = {
 	jq: { options: { runtime: jqRuntime, lib: jqLib }, values: source => concatenated(texts(source), jqFromjson) },
 	js: { options: { runtime: jsRuntime, lib: jsLib }, values: source => jsonLines(lines(source)) },
 };
@@ -165,8 +165,8 @@ const qfil: Command = {
 		runtime: { type: 'string' },
 	},
 	session: (flags, files) => {
-		const flavour = flavours[typeof flags.runtime === 'string' ? flags.runtime : 'jq'] ?? function() {
-			throw new Error(`--runtime must be one of ${Object.keys(flavours).join(', ')}`);
+		const flavor = flavors[typeof flags.runtime === 'string' ? flags.runtime : 'jq'] ?? function() {
+			throw new Error(`--runtime must be one of ${Object.keys(flavors).join(', ')}`);
 		}();
 		// Inputs are read when something first asks for one — `-n` without `input` reads nothing —
 		// and stream: each is yielded as the text completing it arrives
@@ -184,15 +184,15 @@ const qfil: Command = {
 				}
 			} else if (flags.slurp === true) {
 				const all: Value[] = [];
-				for await (const value of flavour.values(input)) {
+				for await (const value of flavor.values(input)) {
 					all.push(value);
 				}
 				yield all;
 			} else {
-				yield* flavour.values(input);
+				yield* flavor.values(input);
 			}
 		}();
-		return { options: flavour.options, inputs };
+		return { options: flavor.options, inputs };
 	},
 };
 

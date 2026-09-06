@@ -1,7 +1,7 @@
 /**
  * The functions that match a regex — `test`, `match`, `split`, `sub`, `gsub` — over a
- * `RegexCompiler`, since what a pattern and its flags mean is a flavour's to say: `regex` is
- * JavaScript's reading, flags included, and the jq flavour translates jq's onto it. `u` and `d`
+ * `RegexCompiler`, since what a pattern and its flags mean is a flavor's to say: `regex` is
+ * JavaScript's reading, flags included, and the jq flavor translates jq's onto it. `u` and `d`
  * are always set, so patterns are Unicode-aware and captures carry offsets; offsets are UTF-16
  * code units.
  */
@@ -86,7 +86,7 @@ export function execAll(regex: RegExp, input: Value): RegExpExecArray[] {
 	}
 }
 
-/** A match as jq's `match` object; where each group's name comes from is the flavour's to say. */
+/** A match as jq's `match` object; where each group's name comes from is the flavor's to say. */
 export function matchObject(match: RegExpExecArray, names: readonly (string | null)[]): ValueObject {
 	const indices: readonly ([ number, number ] | undefined)[] = match.indices!;
 	const captures = indices.slice(1).map((range, ii) => range === undefined

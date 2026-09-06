@@ -1,6 +1,6 @@
 /**
  * The library functions that ask whether a value is true — `not`, `select`, `until`, `while`,
- * `any`, `all` — over a truthiness, since what counts as true is a flavour's to say: JavaScript's
+ * `any`, `all` — over a truthiness, since what counts as true is a flavor's to say: JavaScript's
  * — the empty string, 0 and NaN are false — in `runtime/js`, and jq's — everything but `null`
  * and `false` is true — in `runtime/jq`. The language's constructs that ask the same question —
  * `if`, `and`, `or`, `//` — take their truthiness through the makers in `runtime.ts`.

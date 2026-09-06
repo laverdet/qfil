@@ -1,5 +1,5 @@
 /**
- * The jq flavour's prelude: everything the JavaScript one defines, and what jq tells in its own
+ * The jq flavor's prelude: everything the JavaScript one defines, and what jq tells in its own
  * dialect on top — the date family, as jq itself defines it over `strftime` and `strptime`. The
  * definitions shadow whatever the library inherited under the same names.
  */
@@ -17,7 +17,7 @@ def abs:
 	elif . < 0 then - .
 	else 0
 	end;
-# jq's toboolean parses the spellings; the JavaScript flavour's is Boolean of the input
+# jq's toboolean parses the spellings; the JavaScript flavor's is Boolean of the input
 def toboolean:
 	if type == "boolean" then .
 	elif . == "true" then true

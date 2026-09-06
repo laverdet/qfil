@@ -2,7 +2,7 @@
  * The suite's harness. Differential tests: every case runs through both this compiler and the
  * `jq` binary, and the outputs must agree as JSON values. A case where both raise an error passes
  * without comparing the messages; `divergent` holds the cases where this implementation is meant
- * to differ. `differential` binds a flavour's run options — each test file makes the suite for
+ * to differ. `differential` binds a flavor's run options — each test file makes the suite for
  * the runtime it speaks about.
  */
 import type { Filter, RunOptions, Value } from '#/index.js';
@@ -14,7 +14,7 @@ import { tojson } from '#/runtime/lang/value.js';
 
 export type Case = readonly [ filter: string, input?: Value, inputs?: readonly Value[] ];
 
-/** The differential suite over one flavour, bound to its run options. */
+/** The differential suite over one flavor, bound to its run options. */
 export interface Suite {
 	readonly compile: (source: string, options?: Partial<RunOptions>) => Filter;
 	readonly run: (source: string, input: Value, options?: Partial<RunOptions>) => Value[] | Promise<Value[]>;
@@ -41,7 +41,7 @@ function expected(filter: string, input: Value, inputs: readonly Value[] = []): 
 	return output === 'error' ? output : output.map(line => JSON.parse(line) as Value);
 }
 
-/** The suite over one flavour's run options; `parse` reads a case's input text as the flavour does. */
+/** The suite over one flavor's run options; `parse` reads a case's input text as the flavor does. */
 export function differential(base: RunOptions, parse: (text: string) => Value = text => JSON.parse(text) as Value): Suite {
 	const compile: Suite['compile'] = (source, options) => compileWith(source, { ...base, ...options });
 	const run: Suite['run'] = (source, input, options) => runWith(source, input, { ...base, ...options });

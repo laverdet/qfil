@@ -174,7 +174,7 @@ export const has = values(intrinsics.has);
 export const add = unary(input => [ ...intrinsics.iterate(input) ].reduce(intrinsics.add, null));
 export const tostring = unary(tostringOf);
 // A string is a number as JavaScript reads one — `Number()`: hex, binary and whitespace
-// included, and NaN where nothing parses rather than an error; jq's C reading is the jq flavour's
+// included, and NaN where nothing parses rather than an error; jq's C reading is the jq flavor's
 export const tonumber = unary(input => {
 	if (isNumber(input)) {
 		return input;
@@ -210,7 +210,7 @@ export const to_entries = unary(toEntries);
 /**
  * The key is the first of `key`, `Key`, `name` that is not null or false, else `Name`; the value
  * is `value`, or `Value` when only that is present. Null and false are what jq's `//` skips, so
- * this is jq's builtin exactly, spelled without truthiness — a falsy key survives both flavours.
+ * this is jq's builtin exactly, spelled without truthiness — a falsy key survives both flavors.
  */
 export const from_entries = unary(input => {
 	const result = newObject();

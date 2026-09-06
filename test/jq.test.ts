@@ -186,11 +186,11 @@ agree('jq runtime: what its own suite taught', [
 	[ '"\\ufeff{\\"a\\":1}" | fromjson' ],
 	[ '"b", "c" | capture("(?<x>a)?b?")' ],
 	[ '"c" | [match("(?<x>a)?b?")]' ],
-	// The binary on PATH is built with decnum, as the jq flavour's spelled literals claim to be
+	// The binary on PATH is built with decnum, as the jq flavor's spelled literals claim to be
 	[ 'have_decnum, have_literal_numbers' ],
 ]);
 
-// Core-language departures, raised here because jq compatibility is this flavour's claim
+// Core-language departures, raised here because jq compatibility is this flavor's claim
 divergent('jq 1.8 quirks not followed', [
 	// jq 1.8.2's `repeat` yields `f` of the same input forever; the documented definition is kept
 	[ '[limit(5; repeat(. * 2))]', 1, [ [ 1, 2, 4, 8, 16 ] ] ],

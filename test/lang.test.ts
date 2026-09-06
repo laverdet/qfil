@@ -1,6 +1,6 @@
 /**
- * The language both flavours speak: every differential case runs under the js and the jq flavour,
- * each against the `jq` binary — and the machinery every flavour shares: the compiled shape,
+ * The language both flavors speak: every differential case runs under the js and the jq flavor,
+ * each against the `jq` binary — and the machinery every flavor shares: the compiled shape,
  * filters that await, asynchronous inputs, tail calls, `builtins`.
  */
 import type { Lib, Value } from '#/index.js';

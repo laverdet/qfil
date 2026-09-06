@@ -1,7 +1,7 @@
 /**
  * Time, natively: the epoch second, and ISO-8601 UTC as `Date` speaks it — milliseconds written,
  * fractional seconds read. The broken-down dialect — `gmtime`, `mktime`, `strftime`, `strptime` —
- * and the iso8601 aliases are the jq flavour's, in runtime/jq/date.ts.
+ * and the iso8601 aliases are the jq flavor's, in runtime/jq/date.ts.
  */
 import type { LibFunction } from '#/compiler/filter.js';
 import { assertNumber, assertString, unary } from '#/runtime/lang/library.js';
