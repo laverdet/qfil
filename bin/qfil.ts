@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * `jsjq` — jq at a shell prompt, compiled to JavaScript: `jsjq [options] <filter> [file...]`.
+ * `qfil` — jq at a shell prompt, compiled to JavaScript: `qfil [options] <filter> [file...]`.
  * The jq runtime — spelled numbers, jq's total order, concatenated JSON values read off the input
  * as they complete — unless `--runtime js` asks for JavaScript's, whose input is JSON Lines.
  */
@@ -19,7 +19,7 @@ import * as jsRuntime from 'qfil/runtime/js/runtime.js';
 import { fromjson as jsFromjson } from 'qfil/runtime/lang/value.js';
 import { execute } from './cli.js';
 
-const USAGE = `usage: jsjq [options] <filter> [file...]
+const USAGE = `usage: qfil [options] <filter> [file...]
 
   -n, --null-input       use null as the input; the inputs are read by \`input\` and \`inputs\`
   -R, --raw-input        read each line of input as a string
@@ -156,8 +156,8 @@ function source(files: readonly string[]): Readable {
 	}());
 }
 
-const jsjq: Command = {
-	name: 'jsjq',
+const qfil: Command = {
+	name: 'qfil',
 	usage: USAGE,
 	options: {
 		'raw-input': { type: 'boolean', short: 'R' },
@@ -197,5 +197,5 @@ const jsjq: Command = {
 };
 
 if (process.argv[1] !== undefined && import.meta.url === `file://${process.argv[1]}`) {
-	process.exitCode = await execute(jsjq, process.argv.slice(2));
+	process.exitCode = await execute(qfil, process.argv.slice(2));
 }

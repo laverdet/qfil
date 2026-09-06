@@ -17,7 +17,7 @@ run('[.[] | . * 2]', [ 1, 2, 3 ], { runtime, lib }); // [ [ 2, 4, 6 ] ]
 The runtime and library are explicit: `compile` bundles nothing by default, so an application
 that uses one runtime carries only that one.
 
-At a shell, `jsjq` takes jq's common flags: `jsjq -c '.[] | .name' data.json`, `-n`, `-r`, `-s`, `-R`,
+At a shell, `qfil` takes jq's common flags: `qfil -c '.[] | .name' data.json`, `-n`, `-r`, `-s`, `-R`,
 `-S`, `--arg`, `--argjson`, `--tab`, `--indent` and `-e`. Its default runtime is the jq one —
 spelled numbers, jq's total order — and `--runtime js` selects JavaScript's doubles and order.
 `fq` is the filesystem runtime as a binary of its own.
@@ -202,7 +202,7 @@ it — the promises it starts, the inputs it reads — which is the point.
 
 Inputs may arrive asynchronously: `RunOptions.inputs` takes an `AsyncIterable` as readily as an
 `Iterable`, and `input` and `inputs` are then tasks — a program reading them awaits, one that
-never asks keeps its sync shape. The `jsjq` binary reads standard input this way, streaming: the
+never asks keeps its sync shape. The `qfil` binary reads standard input this way, streaming: the
 jq flavour scans concatenated JSON values cumulatively and yields each as its text completes, the
 JavaScript flavour reads JSON Lines, and `-R` reads lines; nothing waits for the input to end.
 
@@ -274,7 +274,7 @@ only calls into a recursion pay for any of this; everything else compiles as bef
   runtime and library re-exporting the JavaScript ones with local overrides.
 - `runtime/fs/` — the filesystem as values: branded stat objects, and traversal (`.[]`, `..`)
   laid over the JavaScript runtime.
-- `index.ts` — `compile`, `run`, `parse`; `bin/jsjq.ts` and `bin/fq.ts` — the binaries, over
+- `index.ts` — `compile`, `run`, `parse`; `bin/qfil.ts` and `bin/fq.ts` — the binaries, over
   `bin/cli.ts`, what they share of the command line.
 - `test/` — the differential suite against the `jq` binary: `harness.ts`, and the `lang`, `jq`,
   `js` and `fq` suites.

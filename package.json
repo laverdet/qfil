@@ -31,7 +31,7 @@
     "typescript": "^6.0.3"
   },
   "bin": {
-    "jsjq": "./dist/bin/jsjq.js",
+    "qfil": "./dist/bin/qfil.js",
     "fq": "./dist/bin/fq.js"
   }
 }

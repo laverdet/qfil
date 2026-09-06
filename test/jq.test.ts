@@ -1,4 +1,4 @@
-/** The jq runtime — jq's numbers, jq's order, jq's regex flags — and the `jsjq` binary. */
+/** The jq runtime — jq's numbers, jq's order, jq's regex flags — and the `qfil` binary. */
 import type { Value } from '#/index.js';
 import * as assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
@@ -77,7 +77,7 @@ agreeText('jq runtime: numbers keep their spelling', [
 ]);
 
 describe('cli', () => {
-	const cli = (args: readonly string[], input = '', bin = 'jsjq') => {
+	const cli = (args: readonly string[], input = '', bin = 'qfil') => {
 		const result = spawnSync(process.execPath, [ path.join(import.meta.dirname, '..', 'bin', `${bin}.js`), ...args ], { input, encoding: 'utf8' });
 		return { status: result.status, stdout: result.stdout, stderr: result.stderr };
 	};
@@ -103,7 +103,7 @@ describe('cli', () => {
 		assert.equal(cli([ '--runtime', 'js', '.' ], '"foo""bar"').status, 5);
 	});
 	it('yields each output before the input ends', async () => {
-		const child = spawn(process.execPath, [ path.join(import.meta.dirname, '..', 'bin', 'jsjq.js'), '-c', '.' ], { stdio: [ 'pipe', 'pipe', 'inherit' ] });
+		const child = spawn(process.execPath, [ path.join(import.meta.dirname, '..', 'bin', 'qfil.js'), '-c', '.' ], { stdio: [ 'pipe', 'pipe', 'inherit' ] });
 		const readOut = () => new Promise<string>(resolve => {
 			child.stdout.once('data', chunk => resolve(String(chunk)));
 		});
@@ -120,7 +120,7 @@ describe('cli', () => {
 	it('exits as jq does', () => {
 		assert.equal(cli([ '-n', '1 +' ]).status, 3);
 		assert.equal(cli([ '-n', 'error("boom")' ]).status, 5);
-		assert.equal(cli([ '-n', 'error("boom")' ]).stderr, 'jsjq: error: boom\n');
+		assert.equal(cli([ '-n', 'error("boom")' ]).stderr, 'qfil: error: boom\n');
 		assert.deepEqual(cli([ '-n', '"bye" | halt_error(3)' ]), { status: 3, stdout: '', stderr: 'bye' });
 		assert.equal(cli([ '-n', '-e', 'null' ]).status, 1);
 		assert.equal(cli([ '-n', '-e', 'empty' ]).status, 4);
