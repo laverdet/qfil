@@ -43,6 +43,6 @@ const fq: Command = {
 	}),
 };
 
-if (process.argv[1] !== undefined && import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.main) {
 	process.exitCode = await execute(fq, process.argv.slice(2));
 }

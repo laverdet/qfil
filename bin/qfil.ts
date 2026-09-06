@@ -196,6 +196,6 @@ const qfil: Command = {
 	},
 };
 
-if (process.argv[1] !== undefined && import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.main) {
 	process.exitCode = await execute(qfil, process.argv.slice(2));
 }
