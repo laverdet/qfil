@@ -644,4 +644,13 @@ agree('what jq\'s own suite taught', [
 	[ 'pick(first)', [ 1, 2 ] ],
 	[ 'try pick(last) catch .', [ 1, 2 ] ],
 	[ '[path(first, last)]', [ 1, 2 ] ],
+	[ 'capture(["(?<x>a)"])', 'ab' ],
+	[ '[match(["(ba)r"])]', 'foo bar' ],
+	[ 'test(["A", "i"]), test(["a"])', 'a' ],
+	[ 'try test([]) catch .', 'x' ],
+	[ 'try test(["a"]; "i") catch "E"', 'a' ],
+	[ 'try sub(["a"]; "X") catch "E"', 'ab' ],
+	[ 'try [splits([","])] catch "E"', 'a,b' ],
+	[ 'try [scan(["a"])] catch "E"', 'ab' ],
+	[ '[builtins[] | select(startswith("_"))] | length' ],
 ]);

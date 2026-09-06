@@ -76,11 +76,12 @@ function createContext(options: RunOptions): Context {
 		stderr: options.stderr ?? (value => {
 			process.stderr.write(tojson(value));
 		}),
+		// An underscore-prefixed name is internal, and hidden as jq hides its own
 		builtins: () => [ ...new Set([
 			...Object.entries(options.lib).flatMap(([ name, fn ]) =>
 				(fn[arities] ?? [ Math.max(fn.length - 1, 0) ]).map(count => `${name}/${count}`)),
 			...(options.runtime.prelude?.() ?? []).map(def => `${def.name}/${def.params.length}`),
-		]) ],
+		]) ].filter(name => !name.startsWith('_')),
 	};
 }
 

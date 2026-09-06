@@ -41,10 +41,14 @@ function regexOf(compile: RegexCompiler, render: Render, pattern: ast.Node, flag
 		const args = streams(render, flags === null ? [ pattern ] : [ pattern, flags ], function*(_input, re, fl) {
 			yield [ re, fl ?? null ];
 		});
+		let last: { readonly re: Value; readonly fl: Value; readonly compiled: RegExp } | null = null;
 		return function*(input, env, body) {
 			for (const pair of args(input, env)) {
 				const [ re, fl ] = pair as [ Value, Value ];
-				yield* body(compile(re, fl, extra), input);
+				if (last?.re !== re || last.fl !== fl) {
+					last = { re, fl, compiled: compile(re, fl, extra) };
+				}
+				yield* body(last.compiled, input);
 			}
 		};
 	}
@@ -128,14 +132,11 @@ function *substitute(regex: RegExp, input: Value, replacement: (groups: Value) =
 	}
 }
 
+/** `match/2` and `test/2`; the 1-arity forms, and their `[re, flags]` array sugar, are the prelude's dispatch. */
 export function regexFunction(compile: RegexCompiler, extra: string, body: (regex: RegExp, input: Value) => Iterable<Value>): LibFunction {
-	const withRegex = (regexes: WithRegex): Stream => function*(input, env) {
-		yield* regexes(input, env, body);
+	return (render, pattern, flags) => function*(input, env) {
+		yield* regexOf(compile, render, pattern, flags, extra)(input, env, body);
 	};
-	return overload(
-		(render, pattern) => withRegex(regexOf(compile, render, pattern, null, extra)),
-		(render, pattern, flags) => withRegex(regexOf(compile, render, pattern, flags, extra)),
-	);
 }
 
 function subFunction(compile: RegexCompiler, extra: string): LibFunction {
