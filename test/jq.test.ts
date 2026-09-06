@@ -205,6 +205,9 @@ divergent('jq 1.8 quirks not followed', [
 	[ 'reduce ("a","b") as $k (.; .[$k]) = 1', {}, [ { a: { b: 1 } } ] ],
 	[ 'reduce range(1) as $x (.a; .b) |= 5', {}, [ { a: { b: 5 } } ] ],
 	[ 'path(reduce range(1) as $x (.a; empty))', null, 'error' ],
+	// The cost of that design: a fold whose state is a plain value cannot run in path mode, where
+	// jq's per-value tracking can — jq's own `limit` definition leans on it
+	[ '[path(foreach (.a, .b) as $x (2; . - 1; $x))]', { a: 1, b: 2 }, 'error' ],
 	// When a later `?//` pattern is tried inside a fold, jq 1.8.2 loses the state accumulated so far
 	// (it yields 1, 3, 3); the state before the failed update is kept
 	[ '[foreach ([1],2,{"a":3}) as [$a] ?// $a ?// {a: $a} (0; . + $a)]', null, [ [ 1, 3, 6 ] ] ],

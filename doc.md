@@ -64,7 +64,9 @@ implementation deliberately differs:
 - `reduce` and `foreach` are path expressions whose state is a path and the value at it, so
   `path(reduce ("a","b") as $k (.; .[$k]))` is `["a","b"]` whatever the input. jq's own tracking
   through a fold is accidental: the path resets when the fold is backtracked into, and any non-null
-  value along the way is an invalid path expression.
+  value along the way is an invalid path expression. The cost runs the other way too: a fold whose
+  state is a plain value cannot run in path mode here, where jq's per-value tracking lets its own
+  `limit` definition do so.
 - `?//` inside `reduce` or `foreach` keeps the state accumulated before the pattern that failed;
   jq 1.8.2 loses it.
 - A definition that recurses does so on the JavaScript stack, a few thousand levels deep. jq

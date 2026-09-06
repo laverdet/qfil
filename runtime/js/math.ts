@@ -1,10 +1,11 @@
 /**
- * Numbers: the mathematical functions JavaScript itself speaks — the `Math` namespace, with C's
- * rounding kept for `round` — and the number predicates. The C library's extended tail (`frexp`,
- * `ldexp`, the gamma family, `nearbyint` and kin) is the jq flavor's own, in `runtime/jq/math.ts`.
+ * Numbers: the mathematical functions JavaScript itself speaks — the `Math` namespace — and the
+ * number predicates. The C library's extended tail (`frexp`, `ldexp`, the gamma family,
+ * `nearbyint` and kin) is the jq flavor's own, in `runtime/jq/math.ts`, as is C's rounding.
  */
 import type { LibFunction } from '#/compiler/filter.js';
-import { assertNumber, tabled, tabled2, unary } from '#/runtime/lang/library.js';
+import { tabled, tabled2, unary } from '#/runtime/lang/library.js';
+import { isNumber } from '#/runtime/lang/value.js';
 
 /** The functions of the input alone that `Math` speaks. */
 const unaryOf = {
@@ -48,13 +49,30 @@ export const { atan2, hypot, pow } = tabled2(binaryOf);
 
 export const infinite: LibFunction = _render => () => Infinity;
 export const nan: LibFunction = _render => () => NaN;
-export const isnan = unary(input => Number.isNaN(assertNumber(input, 'isnan')));
+// The predicates are false on a non-number rather than an error, as jq has them — and nan is
+// finite, since jq's isfinite is `type == "number" and (isinfinite | not)`
+export const isnan = unary(input => isNumber(input) && Number.isNaN(Number(input)));
 export const isinfinite = unary(input => {
-	const value = assertNumber(input, 'isinfinite');
-	return !Number.isFinite(value) && !Number.isNaN(value);
+	if (isNumber(input)) {
+		const value = Number(input);
+		return !Number.isFinite(value) && !Number.isNaN(value);
+	} else {
+		return false;
+	}
 });
-export const isfinite = unary(input => Number.isFinite(assertNumber(input, 'isfinite')));
+export const isfinite = unary(input => {
+	if (isNumber(input)) {
+		const value = Number(input);
+		return Number.isFinite(value) || Number.isNaN(value);
+	} else {
+		return false;
+	}
+});
 export const isnormal = unary(input => {
-	const value = assertNumber(input, 'isnormal');
-	return value !== 0 && Number.isFinite(value) && Math.abs(value) >= 2 ** -1022;
+	if (isNumber(input)) {
+		const value = Number(input);
+		return value !== 0 && Number.isFinite(value) && Math.abs(value) >= 2 ** -1022;
+	} else {
+		return false;
+	}
 });

@@ -22,27 +22,34 @@ def toboolean: if . then true else false end;
 def add(f): reduce f as $x (null; . + $x);
 def map_values(f): .[] |= f;
 def with_entries(f): to_entries | map(f) | from_entries;
-def paths(f): . as $in | paths | select(. as $p | $in | getpath($p) | f);
 def in(xs): . as $x | xs | has($x);
-def recurse: recurse(.[]?);
+def recurse(f): def r: ., (f | r); r;
 def recurse(f; cond): def r: ., (f | select(cond) | r); r;
+def recurse: recurse(.[]?);
+def paths(f): path(recurse | select(f)) | select(length > 0);
 def last(f): reduce f as $x (null; [ $x ]) | if . == null then empty else .[0] end;
 def first: .[0];
 def last: .[-1];
 def nth($n): .[$n];
+def skip($n; f):
+	if $n < 0 then
+		error("skip doesn't support negative count")
+	else
+		foreach f as $item (0; . + 1; if . > $n then $item else empty end)
+	end;
 def nth($n; f):
 	if $n < 0 then
 		error("nth doesn't support negative indices")
 	else
-		[ limit($n + 1; f) ] | if length > $n then .[$n] else empty end
+		first(skip($n; f))
 	end;
-def any(generator; condition): isempty(first(generator | select(condition))) | not;
+def any(generator; condition): isempty(generator | select(condition)) | not;
 def any(condition): any(.[]; condition);
-def all(generator; condition): isempty(first(generator | select(condition | not)));
+def all(generator; condition): isempty(generator | select(condition | not));
 def all(condition): all(.[]; condition);
 def IN(s): any(s == .; .);
 def IN(source; s): any(source == s; .);
-def INDEX(stream; idx): reduce stream as $row ({}; .[$row | idx | tostring] |= $row);
+def INDEX(stream; idx): reduce stream as $row ({}; .[$row | idx | tostring] = $row);
 def INDEX(idx): INDEX(.[]; idx);
 def combinations:
 	if length == 0 then
@@ -52,15 +59,8 @@ def combinations:
 		(.[1:] | combinations) as $w |
 		[ $x ] + $w
 	end;
-def combinations(n): . as $dot | [ range(n) ] | map($dot) | combinations;
-def transpose:
-	if length == 0 then
-		[]
-	else
-		. as $in |
-		([ .[] | length ] | sort | .[-1]) as $max |
-		[ range($max) | . as $j | [ $in[] | .[$j] ] ]
-	end;
+def combinations(n): . as $dot | [ range(n) | $dot ] | combinations;
+def transpose: [ range(0; map(length) | max // 0) as $i | [ .[][$i] ] ];
 def pick(pathexps):
 	. as $top |
 	reduce path(pathexps) as $p (null; setpath($p; $top | getpath($p)));
@@ -84,7 +84,7 @@ def scan($re; $flags):
 	match($re; "g" + $flags) |
 	if (.captures | length) > 0 then [ .captures[] | .string ] else .string end;
 def scan($re): scan($re; null);
-def finites: select(isinfinite or isnan | not);
+def finites: select(isfinite);
 def normals: select(isnormal);
 def trimstr($s): ltrimstr($s) | rtrimstr($s);
 def index($i): indices($i) | .[0];
@@ -92,12 +92,6 @@ def rindex($i): indices($i) | .[-1:][0];
 def inside(xs): . as $x | xs | contains($x);
 def env: $ENV;
 def debug(msg): (msg | debug | empty), .;
-def skip($n; f):
-	if $n < 0 then
-		error("skip doesn't support negative count")
-	else
-		foreach f as $item (0; . + 1; if . > $n then $item else empty end)
-	end;
 def JOIN($idx; idx_expr): [ .[] | [ ., $idx[idx_expr] ] ];
 def JOIN($idx; stream; idx_expr): stream | [ ., $idx[idx_expr] ];
 def JOIN($idx; stream; idx_expr; join_expr): stream | [ ., $idx[idx_expr] ] | join_expr;

@@ -424,6 +424,9 @@ agree('builtins', [
 	// The harness pipes input without a trailing newline, where the binary too says line 0
 	[ 'input_line_number' ],
 	[ 'modulemeta', 'x' ],
+	// `recurse` is a path expression, as jq's definition makes it
+	[ '[path(recurse)]', { a: [ 1 ] } ],
+	[ '[path(recurse(.a?))]', { a: { a: 2 } } ],
 	// `repeat(exp)` is `exp` of the same input, over and over, until `exp` raises
 	[ '[limit(5; repeat(. * 2))]', 1 ],
 	[ '[limit(5; repeat(. * 2, . * 3))]', 1 ],
@@ -514,6 +517,10 @@ agree('the source of `as` runs up to a comma', [
 
 agree('the math tail', [
 	[ '[.[] | fabs, ceil, floor, trunc]', [ -1.7, 2.5, 3.5, -1.5, -2.5, 2.3 ] ],
+	// The isfinite family is false on a non-number rather than an error, and nan is finite
+	[ '[1, infinite, nan, "a", null | isfinite, isinfinite, isnan, isnormal]' ],
+	[ '[1, infinite, nan | finites]' ],
+	[ '[0.5, 0, infinite, nan | normals]' ],
 	[ '[.[] | sqrt]', [ 4, 2, 0.25 ] ],
 	[ '[.[] | cbrt]', [ -8, 0.5 ] ],
 	[ '[.[] | exp, expm1]', [ 0, 1, 2, 3, 0.1 ] ],

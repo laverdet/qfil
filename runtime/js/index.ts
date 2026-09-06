@@ -20,7 +20,6 @@ import { Await, awaited, each, feed, firstOf, forward, isTask, overload, runtime
 import * as intrinsics from '#/runtime/lang/intrinsics.js';
 import { assertArray, assertNumber, assertString, unary, withFilter, withPath } from '#/runtime/lang/library.js';
 import { ordered } from '#/runtime/lang/order.js';
-import { repeating, unroll } from '#/runtime/lang/recur.js';
 import { matching, regex } from '#/runtime/lang/regexp.js';
 import { conditionals } from '#/runtime/lang/truth.js';
 import { JqError, describe, fromjson as fromjsonOf, isNumber, isObject, newObject, tojson as tojsonOf, tostring as tostringOf, typeOf } from '#/runtime/lang/value.js';
@@ -230,9 +229,6 @@ export const from_entries = unary(input => {
 	return result;
 });
 export const map = withFilter(filter => (input, env) => mapOver(intrinsics.iterate(input), value => filter(value, env)));
-export const recurse = withFilter(update => function*(input, env) {
-	yield* unroll(repeating(input, env, update));
-});
 // `def repeat(exp): def _repeat: exp, _repeat; _repeat;` — the same input every round, an
 // endless stream until `exp` raises: `[repeat(.*2, error)?]` of 1 is `[2]`
 export const repeat = withFilter(update => function*(input, env) {

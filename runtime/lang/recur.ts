@@ -2,7 +2,7 @@
  * Recursion as data, so that a recursive stream runs on the heap rather than the call stack: a
  * step yields outputs and `Recur`s, each of which is a step to run to completion before going on.
  */
-import type { Env, Stream, Value } from '#/compiler/filter.js';
+import type { Value } from '#/compiler/filter.js';
 
 export class Recur {
 	readonly step: Iterable<Value | Recur>;
@@ -23,13 +23,5 @@ export function *unroll(step: Iterable<Value | Recur>): Generator<Value> {
 		} else {
 			yield next.value;
 		}
-	}
-}
-
-/** `def recurse(f): def r: ., (f | r); r;` */
-export function *repeating(state: Value, env: Env, update: Stream): Generator<Value | Recur> {
-	yield state;
-	for (const next of update(state, env)) {
-		yield new Recur(repeating(next, env, update));
 	}
 }
