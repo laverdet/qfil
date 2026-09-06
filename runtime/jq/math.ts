@@ -161,6 +161,8 @@ const unaryOf = {
 	logb: logbOf,
 	nearbyint: halfEven,
 	rint: halfEven,
+	// C rounds halves away from zero, where JavaScript rounds them up
+	round: (value: number) => Math.sign(value) * Math.round(Math.abs(value)),
 	significand: value => frexpOf(value)[0] * 2,
 	tgamma: tgammaOf,
 } satisfies Readonly<Record<string, (value: number) => number>>;
@@ -188,7 +190,7 @@ function unsupported(name: string): () => never {
 	};
 }
 
-export const { exp2, exp10, gamma, lgamma, logb, nearbyint, rint, significand, tgamma } = tabled(unaryOf);
+export const { exp2, exp10, gamma, lgamma, logb, nearbyint, rint, round, significand, tgamma } = tabled(unaryOf);
 export const { copysign, drem, fdim, fmax, fmin, fmod, ldexp, nextafter, nexttoward, remainder, scalb, scalbln } = tabled2(binaryOf);
 export const frexp = unary(input => frexpOf(assertNumber(input, 'frexp')));
 export const modf = unary(input => {

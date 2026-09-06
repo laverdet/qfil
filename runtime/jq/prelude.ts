@@ -17,6 +17,13 @@ def abs:
 	elif . < 0 then - .
 	else 0
 	end;
+# jq's toboolean parses the spellings; the JavaScript flavour's is Boolean of the input
+def toboolean:
+	if type == "boolean" then .
+	elif . == "true" then true
+	elif . == "false" then false
+	else error("\\(.) cannot be parsed as a boolean")
+	end;
 def todate: strftime("%Y-%m-%dT%H:%M:%SZ");
 def todateiso8601: todate;
 def fromdateiso8601: strptime("%Y-%m-%dT%H:%M:%SZ") | mktime;

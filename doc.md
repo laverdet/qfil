@@ -36,6 +36,12 @@ implementation deliberately differs:
   variables, containers, `tostring`, `tonumber`, `fromjson`, `sort` and negation, until
   arithmetic touches it. Infinity is written as the largest finite number, as jq does; NaN as
   `null`.
+- The JavaScript runtime speaks JavaScript where jq would speak C: truthiness is `Boolean` (the
+  empty string, 0 and NaN are false, so `if`, `and`/`or`, `//`, `select` and `toboolean` follow),
+  `tonumber` is `Number()` (NaN where nothing parses, rather than an error), `round` is
+  `Math.round`, and `/` and `%` are IEEE — a zero divisor gives an infinity or NaN, `%` is the
+  floating-point remainder. The jq runtime keeps jq's truth, C's strtod, rounding away from zero,
+  and the zero-divisor errors.
 - Objects are plain JavaScript objects, so integer-like keys iterate first (`{"b":1,"1":2}` writes as
   `{"1":2,"b":1}`). Every object the language makes has a null prototype, so `__proto__` is an
   ordinary key.
@@ -54,7 +60,7 @@ implementation deliberately differs:
   NaN, and anything else subtracts, so `[] < {}` is false, objects do not sort, and
   `sort_by`/`group_by` compare their keys element by element. The jq runtime has jq's total order:
   null < false < true < numbers < strings < arrays < objects.
-- A trailing comma may end an object literal — `{a: 1, b: 2,}` — an extension; jq takes none.
+- A trailing comma may end an object literal — `{a: 1, b: 2,}` — as jq 1.8 takes one; neither takes one in an array.
 - `repeat(f)` keeps its documented meaning (`., (f | repeat(f))`); jq 1.8.2 yields `f` of the same
   input forever.
 - `reduce` and `foreach` are path expressions whose state is a path and the value at it, so
@@ -261,9 +267,10 @@ only calls into a recursion pay for any of this; everything else compiles as bef
 - `runtime/lang/` — what every flavour shares: `value.ts` (equality, JSON, `JqError`; ordering is
   a flavour's own), `intrinsics.ts` (the operations on values: indexing, arithmetic, paths, the
   `Editor`, formats), `library.ts` (what a library function is built from), and the makers a
-  flavour instantiates with its own ordering and regex reading — `order.ts` (`ordered`),
-  `regexp.ts` (`matching` over a `RegexCompiler`), `runtime.ts` (`operators`, `binaryOver`,
-  `sliceOver`).
+  flavour instantiates with its own ordering, truthiness and regex reading — `order.ts`
+  (`ordered`), `truth.ts` (`conditionals`), `regexp.ts` (`matching` over a `RegexCompiler`),
+  `recur.ts` (recursion as data), and `runtime.ts` (`operators`, `binaryOver`, `sliceOver`, and
+  the truthiness-taking `ifOver`, `logicalOver`, `alternativeOver`, `assignOver`).
 - `runtime/js/runtime.ts` — the JavaScript runtime: a handler per kind of node, each a direct
   export, so the module's namespace object — `import * as runtime` — is the runtime itself.
 - `runtime/js/index.ts` — the JavaScript library on the same scheme, one export per name, with

@@ -6,7 +6,7 @@
 import type { Path, Value, ValueObject } from '#/compiler/filter.js';
 import { Halt, JqError, compareStrings, copyObject, describe, equal, isNumber, isObject, newObject, tojson, tostring, typeOf } from './value.js';
 
-export { Halt, JqError, equal, fromjson, tojson, tonumber, tostring, truthy, typeOf } from './value.js';
+export { Halt, JqError, equal, fromjson, tojson, tostring, typeOf } from './value.js';
 
 // V8's String::kMaxLength — 512MiB less the object header — past which the engine could not hold
 // the result either; jq's own cap raises the same complaint
@@ -215,11 +215,9 @@ function merge(left: ValueObject, right: ValueObject): ValueObject {
 	return result;
 }
 
+/** `/` as JavaScript's numbers have it — a zero divisor gives an infinity or NaN; jq's error is the jq runtime's — and a string splits by a string. */
 export function divide(left: Value, right: Value): Value {
 	if (isNumber(left) && isNumber(right)) {
-		if (Number(right) === 0) {
-			throw new JqError(`${describe(left)} and ${describe(right)} cannot be divided because the divisor is zero`);
-		}
 		return left / right;
 	} else if (typeof left === 'string' && typeof right === 'string') {
 		return split(left, right);
@@ -232,13 +230,10 @@ export function split(text: string, separator: string): string[] {
 	return text === '' ? [] : text.split(separator);
 }
 
+/** `%` as JavaScript has it: the floating-point remainder, NaN for a zero divisor; jq's integer remainder over intmax casts is the jq runtime's. */
 export function modulo(left: Value, right: Value): Value {
 	if (isNumber(left) && isNumber(right)) {
-		const divisor = Math.trunc(right);
-		if (divisor === 0) {
-			throw new JqError(`${describe(left)} and ${describe(right)} cannot be divided (remainder) because the divisor is zero`);
-		}
-		return Math.trunc(left) % divisor;
+		return left % right;
 	}
 	throw new JqError(`${describe(left)} and ${describe(right)} cannot be divided (remainder)`);
 }

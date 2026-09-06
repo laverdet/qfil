@@ -27,8 +27,7 @@ const unaryOf = {
 	log10: Math.log10,
 	log1p: Math.log1p,
 	log2: Math.log2,
-	// C rounds halves away from zero, where JavaScript rounds them up
-	round: (value: number) => Math.sign(value) * Math.round(Math.abs(value)),
+	round: Math.round,
 	sin: Math.sin,
 	sinh: Math.sinh,
 	sqrt: Math.sqrt,

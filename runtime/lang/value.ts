@@ -61,11 +61,6 @@ export function isObject(value: Value): value is ValueObject {
 	return typeof value === 'object' && value !== null && !Array.isArray(value) && !(value instanceof Number);
 }
 
-/** jq's truth: everything but `null` and `false`. */
-export function truthy(value: Value): boolean {
-	return value !== null && value !== false;
-}
-
 /** A value as an error message names it: `number (1)`, `string ("abc…)`. */
 export function describe(value: Value): string {
 	const json = tojson(value);
@@ -98,17 +93,6 @@ export function fromjson(text: string): Value {
 /** Strings are themselves; anything else is its JSON. */
 export function tostring(value: Value): string {
 	return typeof value === 'string' ? value : tojson(value);
-}
-
-const numberRegex = /^[+-]?(?:(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?|nan|infinity)$/i;
-
-export function tonumber(value: Value): number {
-	if (isNumber(value)) {
-		return value;
-	} else if (typeof value === 'string' && numberRegex.test(value)) {
-		return Number(value);
-	}
-	throw new JqError(`${describe(value)} cannot be parsed as a number`);
 }
 
 /** Strings against strings, by code unit, which every ordering shares. */

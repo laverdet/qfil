@@ -108,6 +108,8 @@ export function differential(base: RunOptions, parse: (text: string) => Value = 
 			for (const [ filter, input, wanted ] of cases) {
 				it(filter, () => {
 					assert.deepEqual(ours(filter, input), wanted);
+					// A divergence must diverge: were the binary to agree, the case belongs in `agree`
+					assert.notDeepEqual(expected(filter, input), wanted, 'jq produces the same output; this case is not divergent');
 				});
 			}
 		});

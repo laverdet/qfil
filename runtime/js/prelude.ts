@@ -18,17 +18,9 @@ def arrays: select(type == "array");
 def objects: select(type == "object");
 def iterables: select(type == "array" or type == "object");
 def scalars: select(type != "array" and type != "object");
-def toboolean:
-	if type == "boolean" then .
-	elif . == "true" then true
-	elif . == "false" then false
-	else error("\\(.) cannot be parsed as a boolean")
-	end;
+def toboolean: if . then true else false end;
 def add(f): reduce f as $x (null; . + $x);
 def map_values(f): .[] |= f;
-def from_entries:
-	map({ (.key // .Key // .name // .Name): if has("value") then .value else .Value end }) |
-	add // {};
 def with_entries(f): to_entries | map(f) | from_entries;
 def paths(f): . as $in | paths | select(. as $p | $in | getpath($p) | f);
 def in(xs): . as $x | xs | has($x);

@@ -15,13 +15,15 @@
  * `compile` takes a `lib` option, so an application may supply a library of its own.
  */
 import type { Context, Env, Filter, LibFunction, Path, Render, Resumed, Stream, Value } from '#/compiler/filter.js';
-import { compare } from './value.js';
+import { compare, truthy } from './value.js';
 import { Await, awaited, each, feed, firstOf, forward, isTask, overload, runtimePathFunction, streams, task, values } from '#/compiler/filter.js';
 import * as intrinsics from '#/runtime/lang/intrinsics.js';
 import { assertArray, assertNumber, assertString, unary, withFilter, withPath } from '#/runtime/lang/library.js';
 import { ordered } from '#/runtime/lang/order.js';
+import { repeating, unroll } from '#/runtime/lang/recur.js';
 import { matching, regex } from '#/runtime/lang/regexp.js';
-import { JqError, describe, fromjson as fromjsonOf, isNumber, isObject, newObject, tojson as tojsonOf, tonumber as tonumberOf, tostring as tostringOf, truthy, typeOf } from '#/runtime/lang/value.js';
+import { conditionals } from '#/runtime/lang/truth.js';
+import { JqError, describe, fromjson as fromjsonOf, isNumber, isObject, newObject, tojson as tojsonOf, tostring as tostringOf, typeOf } from '#/runtime/lang/value.js';
 
 export * from './date.js';
 export * from './math.js';
@@ -66,65 +68,6 @@ function toEntries(value: Value): Value[] {
 		return Object.keys(value).map(key => ({ __proto__: null, key, value: value[key]! }));
 	}
 	throw new JqError(`${describe(value)} has no keys`);
-}
-
-/**
- * Recursion as data, so that a recursive stream runs on the heap rather than the call stack: a step
- * yields outputs and `Recur`s, each of which is a step to run to completion before going on.
- */
-class Recur {
-	readonly step: Iterable<Value | Recur>;
-
-	constructor(step: Iterable<Value | Recur>) {
-		this.step = step;
-	}
-}
-
-function *unroll(step: Iterable<Value | Recur>): Generator<Value> {
-	const stack = [ step[Symbol.iterator]() ];
-	while (stack.length > 0) {
-		const next = stack[stack.length - 1]!.next();
-		if (next.done === true) {
-			stack.pop();
-		} else if (next.value instanceof Recur) {
-			stack.push(next.value.step[Symbol.iterator]());
-		} else {
-			yield next.value;
-		}
-	}
-}
-
-/** `def repeat(f): ., (f | repeat(f));` — which is also `recurse(f)`. */
-function *repeating(state: Value, env: Env, update: Stream): Generator<Value | Recur> {
-	yield state;
-	for (const next of update(state, env)) {
-		yield new Recur(repeating(next, env, update));
-	}
-}
-
-/** `def until(cond; update): if cond then . else (update | until(cond; update)) end;` */
-function *untilTruthy(state: Value, env: Env, cond: Stream, update: Stream): Generator<Value | Recur> {
-	for (const test of cond(state, env)) {
-		if (truthy(test)) {
-			yield state;
-		} else {
-			for (const next of update(state, env)) {
-				yield new Recur(untilTruthy(next, env, cond, update));
-			}
-		}
-	}
-}
-
-/** `def while(cond; update): if cond then ., (update | while(cond; update)) else empty end;` */
-function *loop(state: Value, env: Env, cond: Stream, update: Stream): Generator<Value | Recur> {
-	for (const test of cond(state, env)) {
-		if (truthy(test)) {
-			yield state;
-			for (const next of update(state, env)) {
-				yield new Recur(loop(next, env, cond, update));
-			}
-		}
-	}
 }
 
 /** `walk(f)`: `f` applied bottom-up; a member whose result is empty is dropped, as `|=` drops it. */
@@ -212,7 +155,10 @@ function *limited<Type>(count: Value, outputs: Iterable<Type>): Generator<Type> 
 	}
 }
 
-export const not = unary(input => !truthy(input));
+const conds = conditionals(truthy);
+export const { not, select, until, any, all } = conds;
+const { while: whileOf } = conds;
+export { whileOf as while };
 export const error = overload(
 	unary(input => {
 		throw new JqError(input);
@@ -227,7 +173,16 @@ export const keys = unary(intrinsics.keys);
 export const has = values(intrinsics.has);
 export const add = unary(input => [ ...intrinsics.iterate(input) ].reduce(intrinsics.add, null));
 export const tostring = unary(tostringOf);
-export const tonumber = unary(tonumberOf);
+// A string is a number as JavaScript reads one — `Number()`: hex, binary and whitespace
+// included, and NaN where nothing parses rather than an error; jq's C reading is the jq flavour's
+export const tonumber = unary(input => {
+	if (isNumber(input)) {
+		return input;
+	} else if (typeof input === 'string') {
+		return Number(input);
+	}
+	throw new JqError(`${describe(input)} cannot be parsed as a number`);
+});
 export const tojson = unary(input => tojsonOf(input));
 export const fromjson = unary(input => fromjsonOf(assertString(input, 'fromjson')));
 export const getpath: LibFunction = runtimePathFunction(
@@ -252,6 +207,28 @@ export const paths: LibFunction = _render => function*(input) {
 	}
 };
 export const to_entries = unary(toEntries);
+/**
+ * The key is the first of `key`, `Key`, `name` that is not null or false, else `Name`; the value
+ * is `value`, or `Value` when only that is present. Null and false are what jq's `//` skips, so
+ * this is jq's builtin exactly, spelled without truthiness — a falsy key survives both flavours.
+ */
+export const from_entries = unary(input => {
+	const result = newObject();
+	for (const entry of intrinsics.iterate(input)) {
+		const key = function() {
+			for (const name of [ 'key', 'Key', 'name' ] as const) {
+				const found = intrinsics.field(entry, name);
+				if (found !== null && found !== false) {
+					return found;
+				}
+			}
+			return intrinsics.field(entry, 'Name');
+		}();
+		const value = intrinsics.has(entry, 'value') ? intrinsics.field(entry, 'value') : intrinsics.field(entry, 'Value');
+		result[intrinsics.toKey(key)] = value;
+	}
+	return result;
+});
 export const map = withFilter(filter => (input, env) => mapOver(intrinsics.iterate(input), value => filter(value, env)));
 export const recurse = withFilter(update => function*(input, env) {
 	yield* unroll(repeating(input, env, update));
@@ -259,21 +236,6 @@ export const recurse = withFilter(update => function*(input, env) {
 export const repeat = withFilter(update => function*(input, env) {
 	yield* unroll(repeating(input, env, update));
 });
-export const until: LibFunction = (render, cond, update) => {
-	const test = render.generator(cond);
-	const step = render.generator(update);
-	return function*(input, env) {
-		yield* unroll(untilTruthy(input, env, test, step));
-	};
-};
-const whileOf: LibFunction = (render, cond, update) => {
-	const test = render.generator(cond);
-	const step = render.generator(update);
-	return function*(input, env) {
-		yield* unroll(loop(input, env, test, step));
-	};
-};
-export { whileOf as while };
 export const walk = withFilter(filter => function*(input, env) {
 	yield* walking(input, env, filter);
 });
@@ -311,25 +273,6 @@ export const del = withPath(paths => {
 		return (input, env) => intrinsics.delpaths(input, [ ...paths([], input, env) ].map(([ path ]) => path));
 	}
 });
-export const select: LibFunction = runtimePathFunction(
-	withFilter(condition => function*(input, env) {
-		for (const test of condition(input, env)) {
-			if (truthy(test)) {
-				yield input;
-			}
-		}
-	}),
-	(render, arg) => {
-		const condition = render.generator(arg);
-		return function*(path, value, env) {
-			for (const test of condition(value, env)) {
-				if (truthy(test)) {
-					yield [ path, value ];
-				}
-			}
-		};
-	},
-);
 export const first = overload(
 	unary(input => assertArray(input, 'first')[0] ?? null),
 	runtimePathFunction(
@@ -447,8 +390,6 @@ export function stderr(this: Context, _render: Render): Filter {
 		return input;
 	};
 }
-export const any = unary(input => [ ...intrinsics.iterate(input) ].some(truthy));
-export const all = unary(input => [ ...intrinsics.iterate(input) ].every(truthy));
 export const last = unary(input => assertArray(input, 'last').at(-1) ?? null);
 export const { sort, sort_by, group_by, unique, unique_by, min, max, min_by, max_by, bsearch } = ordered(compare);
 export const { test, match, sub, gsub, split } = matching(regex);

@@ -6,10 +6,10 @@
  */
 import type * as ast from '#/compiler/ast.js';
 import type { Handler, Value } from '#/compiler/filter.js';
-import { Spelled, compare, spelled } from './value.js';
+import { Spelled, compare, spelled, truthy } from './value.js';
 import { combine } from '#/compiler/filter.js';
-import { negate as negateNumber } from '#/runtime/lang/intrinsics.js';
-import { binaryOver, operators, sliceOver } from '#/runtime/lang/runtime.js';
+import { divide, negate as negateNumber } from '#/runtime/lang/intrinsics.js';
+import { alternativeOver, assignOver, binaryOver, ifOver, logicalOver, operators, sliceOver } from '#/runtime/lang/runtime.js';
 import { JqError, describe, isNumber } from '#/runtime/lang/value.js';
 
 export * from '#/runtime/js/runtime.js';
@@ -74,5 +74,20 @@ export const literal: Handler<ast.Literal> = {
 export const negate: Handler<ast.Negate> = {
 	value: (node, render) => combine([ render.filter(node.operand) ], ([ value ]) => negated(value!)),
 };
-export const binary = binaryOver({ ...operators(compare), '%': modulo });
+/** jq's `/`: dividing by zero is an error, where JavaScript's gives an infinity. */
+function divided(left: Value, right: Value): Value {
+	if (isNumber(left) && isNumber(right) && Number(right) === 0) {
+		throw new JqError(`${describe(left)} and ${describe(right)} cannot be divided because the divisor is zero`);
+	}
+	return divide(left, right);
+}
+
+const ops = { ...operators(compare), '/': divided, '%': modulo };
+
+export const binary = binaryOver(ops);
+export const assign = assignOver(ops, truthy);
+export const { and, or } = logicalOver(truthy);
+export const alternative = alternativeOver(truthy);
+const ifOf = ifOver(truthy);
+export { ifOf as if };
 export const slice = sliceOver(unbounded);

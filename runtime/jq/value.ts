@@ -10,7 +10,7 @@
  */
 import type { Value, ValueObject } from '#/compiler/filter.js';
 import type { ValueType } from '#/runtime/lang/value.js';
-import { JqError, compareStrings, newObject, tonumber as tonumberOf, typeOf } from '#/runtime/lang/value.js';
+import { JqError, compareStrings, describe, isNumber, newObject, typeOf } from '#/runtime/lang/value.js';
 
 /**
  * A number that remembers how it was spelled; a `Number` in every other respect. Only a decimal
@@ -66,9 +66,25 @@ export function spelled(value: number, text: string): Value {
 
 const literalRegex = /^-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
 
-/** `tonumber`: a string that is a decimal literal keeps its spelling. */
+/** jq's truth: everything but `null` and `false`; 0, NaN and the empty string are true. */
+export function truthy(value: Value): boolean {
+	return value !== null && value !== false;
+}
+
+const numberRegex = /^[+-]?(?:(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?|nan|infinity)$/i;
+
+/** `tonumber`: a string that is a decimal literal keeps its spelling; the rest read as C's strtod does. */
 export function tonumber(value: Value): Value {
-	return typeof value === 'string' && literalRegex.test(value) ? spelled(Number(value), value) : tonumberOf(value);
+	if (typeof value === 'string') {
+		if (literalRegex.test(value)) {
+			return spelled(Number(value), value);
+		} else if (numberRegex.test(value)) {
+			return Number(value);
+		}
+	} else if (isNumber(value)) {
+		return value;
+	}
+	throw new JqError(`${describe(value)} cannot be parsed as a number`);
 }
 
 /** The single-character escapes of a JSON string, keyed by the character after the backslash. */

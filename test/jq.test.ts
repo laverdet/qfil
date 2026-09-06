@@ -186,10 +186,29 @@ agree('jq runtime: what its own suite taught', [
 	[ '"\\ufeff{\\"a\\":1}" | fromjson' ],
 	[ '"b", "c" | capture("(?<x>a)?b?")' ],
 	[ '"c" | [match("(?<x>a)?b?")]' ],
+	// The binary on PATH is built with decnum, as the jq flavour's spelled literals claim to be
+	[ 'have_decnum, have_literal_numbers' ],
 ]);
 
-divergent('spelling is decNumber\'s literal behavior', [
-	// The binary on PATH is built without decnum; the jq flavour's spelled literals behave as
-	// decNumber's do, and say so
-	[ 'have_decnum', null, [ true ] ],
+// Core-language departures, raised here because jq compatibility is this flavour's claim
+divergent('jq 1.8 quirks not followed', [
+	// jq 1.8.2's `repeat` yields `f` of the same input forever; the documented definition is kept
+	[ '[limit(5; repeat(. * 2))]', 1, [ [ 1, 2, 4, 8, 16 ] ] ],
+	[ '[limit(3; repeat(. * 2, . * 3))]', 1, [ [ 1, 2, 4 ] ] ],
+	// jq tracks paths through `reduce` and `foreach` only by accident: the path resets whenever the
+	// fold is backtracked into (`[path(…)]` of the same fold gives `[[]]`), and any non-null value
+	// along the way is an "Invalid path expression". Here the state is a path and its value
+	// throughout, as `getpath` would have it.
+	[ 'path(reduce ("a","b") as $k (.; .[$k]))', { a: { b: 1 } }, [ [ 'a', 'b' ] ] ],
+	[ '[path(reduce (0,1) as $x (.; .[$x]))]', null, [ [ [ 0, 1 ] ] ] ],
+	[ '[path(foreach ("a","b") as $k (.; .[$k]))]', null, [ [ [ 'a' ], [ 'a', 'b' ] ] ] ],
+	[ '[path(foreach ("a","b") as $k (.; .[$k]; .x))]', null, [ [ [ 'a', 'x' ], [ 'a', 'b', 'x' ] ] ] ],
+	[ '[path(reduce (0,1) as $x (.; .[$x], .[$x + 10]))]', null, [ [ [ 10, 11 ] ] ] ],
+	[ 'path(reduce (["a"],["b"]) as [$k] (.; .[$k]))', null, [ [ 'a', 'b' ] ] ],
+	[ 'reduce ("a","b") as $k (.; .[$k]) = 1', {}, [ { a: { b: 1 } } ] ],
+	[ 'reduce range(1) as $x (.a; .b) |= 5', {}, [ { a: { b: 5 } } ] ],
+	[ 'path(reduce range(1) as $x (.a; empty))', null, 'error' ],
+	// When a later `?//` pattern is tried inside a fold, jq 1.8.2 loses the state accumulated so far
+	// (it yields 1, 3, 3); the state before the failed update is kept
+	[ '[foreach ([1],2,{"a":3}) as [$a] ?// $a ?// {a: $a} (0; . + $a)]', null, [ [ 1, 3, 6 ] ] ],
 ]);
