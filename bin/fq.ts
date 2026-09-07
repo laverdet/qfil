@@ -43,6 +43,4 @@ const fq: Command = {
 	}),
 };
 
-if (import.meta.main) {
-	process.exitCode = await execute(fq, process.argv.slice(2));
-}
+process.exitCode = await execute(fq, process.argv.slice(2));

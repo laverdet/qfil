@@ -196,6 +196,4 @@ const qfil: Command = {
 	},
 };
 
-if (import.meta.main) {
-	process.exitCode = await execute(qfil, process.argv.slice(2));
-}
+process.exitCode = await execute(qfil, process.argv.slice(2));

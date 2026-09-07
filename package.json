@@ -11,9 +11,16 @@
     ".": "./dist/index.js",
     "./*": "./dist/*"
   },
+  "files": [
+    "bin/qfil",
+    "bin/fq",
+    "dist",
+    "!dist/test"
+  ],
   "scripts": {
     "build": "tsc",
     "lint": "eslint --max-warnings 0 .",
+    "prepack": "tsc",
     "test": "tsc && node --test dist/test/*.test.js",
     "watch": "tsc -w"
   },
@@ -31,7 +38,7 @@
     "typescript": "^6.0.3"
   },
   "bin": {
-    "qfil": "./dist/bin/qfil.js",
-    "fq": "./dist/bin/fq.js"
+    "qfil": "./bin/qfil",
+    "fq": "./bin/fq"
   }
 }

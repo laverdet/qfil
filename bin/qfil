@@ -1,0 +1,4 @@
+#!/usr/bin/env node
+// The executable: committed with its x bit, which tsc's output never carries, so an npm or
+// checkout installation works as soon as the build exists.
+import '#/bin/qfil.js';
