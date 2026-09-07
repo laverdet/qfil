@@ -17,6 +17,7 @@ import { tojson } from './runtime/lang/value.js';
 
 export type { Context, Env, Filter as LibFilter, Handled, Handler, Lib, LibFunction, Path, PathFilter, Render, Resumed, Runtime, Stream, Value, ValueObject } from './compiler/filter.js';
 export { Await, Bounce, Break, CompileError, Tail, abreast, awaited, combine, combineStreams, constant, driven, each, feed, generator, isStream, isTask, once, over, overload, pathForm, promises, runtimePathFunction, settle, streams, task, unrolled, values } from './compiler/filter.js';
+export type { Prelude } from './compiler/parser.js';
 export { ParseError, definitions, parse } from './compiler/parser.js';
 export { Halt, JqError } from './runtime/lang/value.js';
 
@@ -80,7 +81,7 @@ function createContext(options: RunOptions): Context {
 		builtins: () => [ ...new Set([
 			...Object.entries(options.lib).flatMap(([ name, fn ]) =>
 				(fn[arities] ?? [ Math.max(fn.length - 1, 0) ]).map(count => `${name}/${count}`)),
-			...(options.runtime.prelude?.() ?? []).map(def => `${def.name}/${def.params.length}`),
+			...(options.runtime.prelude?.().defs ?? []).map(def => `${def.name}/${def.params.length}`),
 		]) ].filter(name => !name.startsWith('_')),
 	};
 }
@@ -91,7 +92,7 @@ function createContext(options: RunOptions): Context {
  * generator function, iterated with `for await`, and `awaits` says so.
  */
 export function compile(source: string, options: RunOptions): Filter {
-	const program = instantiate(source, parse(source), options.runtime, options.lib, createContext(options));
+	const program = instantiate(source, parse(source, options.runtime.prelude?.()), options.runtime, options.lib, createContext(options));
 	return Object.assign(program.filter, {
 		awaits: program.awaits,
 		stream: program.stream,

@@ -11,6 +11,7 @@
  * a path — or reads the syntax itself, as `test("^a")` does to compile its pattern once.
  */
 import type * as ast from './ast.js';
+import type { Prelude } from './parser.js';
 
 /**
  * The values a filter reads and writes: plain JSON as JavaScript already holds it — `null`,
@@ -94,10 +95,12 @@ export interface Runtime extends Handlers {
 	readonly invalidPath: (value: Value) => never;
 	/**
 	 * Builtins written in the language itself, as a function of nothing returning their parsed
-	 * definitions — `once(() => definitions(source))` — in scope of every program compiled with
-	 * this runtime. A body is rendered only when a program first calls it.
+	 * prelude — `once(() => definitions(source))` — in scope of every program compiled with this
+	 * runtime. The prelude is the root scope the program's parse resolves calls against; a
+	 * definition binds only when a program references it, and its body renders only when first
+	 * called.
 	 */
-	readonly prelude?: () => readonly ast.Def[];
+	readonly prelude?: () => Prelude;
 }
 
 /** What a program reaches at runtime besides its input. */

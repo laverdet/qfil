@@ -81,6 +81,8 @@ interface DefBinding {
 	/** Renders the body for a set of awaiting arguments; set by `def` once the body's scope exists. */
 	render?: (params: string) => Filter;
 	renderPath?: (params: string) => PathFilter;
+	/** A prelude definition's one Bound, closed over the root; a call site holds it directly. */
+	bound?: Bound;
 }
 
 /** A filter parameter: its frame holds a closure. */
@@ -303,11 +305,7 @@ export interface Program {
 }
 
 export function instantiate(source: string, program: ast.Node, runtime: Runtime, lib: Lib, ctx: Context): Program {
-	// The prelude's definitions enclose the program — the program's own shadow them — and their
-	// bodies render only on first call, so an unused definition costs its binding alone
-	const defs = runtime.prelude?.() ?? [];
-	const whole = defs.reduceRight<ast.Node>((rest, def) => ({ ...def, rest }), program);
-	return new Compiler(source, runtime, lib, ctx).program(whole);
+	return new Compiler(source, runtime, lib, ctx).program(program);
 }
 
 class Compiler {
@@ -318,6 +316,7 @@ class Compiler {
 	private synthetics = 0;
 	/** The body variant being rendered: whom a compiled tail call makes bouncy. */
 	private rendering: Variant | null = null;
+	private readonly preludeBindings = new Map<ast.Def, DefBinding>();
 
 	constructor(source: string, runtime: Runtime, lib: Lib, ctx: Context) {
 		this.source = source;
@@ -484,18 +483,42 @@ class Compiler {
 		return () => value;
 	}
 
-	/** A call's binding: a definition in scope, else a library function whose parameters fit the call. */
+	/** A call's binding: a definition in scope, the prelude definition the parse resolved, else a library function whose parameters fit the call. */
 	private lookupFunction(node: ast.Call, scope: Scope): FuncBinding | LibFunction {
 		const key = `${node.name}/${node.args.length}`;
 		const local = scope.func(key);
 		if (local !== undefined) {
 			return local;
 		}
+		const target = node.target;
+		if (target !== undefined && 'type' in target) {
+			// Resolved at parse to a definition no frame of the program holds: the prelude's
+			return this.preludeBinding(target);
+		}
 		const fn = this.lib[node.name];
 		if (fn === undefined || (fn.length !== 0 && fn.length !== node.args.length + 1)) {
 			throw this.error(`${key} is not defined`, node.at);
 		}
 		return fn;
+	}
+
+	/**
+	 * A definition of the prelude, reached through a call's parse-time resolution. The prelude's
+	 * definitions enclose every program — the program's own shadow them, being closer — but they
+	 * occupy no environment frames and cost nothing until referenced: a binding is made lazily per
+	 * definition, closed over the root, so a call site holds its one Bound directly. Sequential
+	 * visibility is the parse's own: a body's calls were resolved against the definitions above
+	 * it, and itself, when the prelude's source was parsed.
+	 */
+	private preludeBinding(def: ast.Def): DefBinding {
+		const existing = this.preludeBindings.get(def);
+		if (existing !== undefined) {
+			return existing;
+		}
+		const { binding, definition } = this.definition(def, new Scope(null, 0));
+		binding.bound = { definition, env: null };
+		this.preludeBindings.set(def, binding);
+		return binding;
 	}
 
 	/** A library function applied to a call's syntax; a compile error it raises is placed at the call. */
@@ -550,6 +573,7 @@ class Compiler {
 				return binding.task ? task(site) : site;
 			}
 			case 'def': {
+				const at = this.boundOf(binding, scope);
 				const callee = this.callee(binding, node, scope);
 				const variant = this.pathVariant(binding, callee.params);
 				if (variant.awaits === undefined) {
@@ -561,13 +585,13 @@ class Compiler {
 					: (bound: Bound) => bound.definition.path;
 				const called: PathFilter = callee.task
 					? function*(path, value, env) {
-						const bound = lookup(env, distance) as Bound;
+						const bound = at(env);
 						yield* each(callee(bound, env, value), function*(frames) {
 							yield* paths(bound)(path, value, frames);
 						});
 					}
 					: function*(path, value, env) {
-						const bound = lookup(env, distance) as Bound;
+						const bound = at(env);
 						for (const frames of callee(bound, env, value)) {
 							yield* paths(bound)(path, value, frames);
 						}
@@ -603,9 +627,19 @@ class Compiler {
 		return binding.pathVariants.get(params)!;
 	}
 
+	/** How a call site reaches a definition's Bound: held directly for a prelude definition, looked up the environment otherwise. */
+	private boundOf(binding: DefBinding, scope: Scope): (env: Env) => Bound {
+		const constant = binding.bound;
+		if (constant !== undefined) {
+			return () => constant;
+		}
+		const distance = scope.distance(binding.slot);
+		return env => lookup(env, distance) as Bound;
+	}
+
 	/** A call to a definition: its frame, then each argument, pushed on the environment it closed over. */
 	private callDef(binding: DefBinding, node: ast.Call, scope: Scope, tail: boolean): Filter {
-		const distance = scope.distance(binding.slot);
+		const at = this.boundOf(binding, scope);
 		const callee = this.callee(binding, node, scope);
 		const variant = this.variant(binding, callee.params);
 		const body = callee.params.includes('1')
@@ -625,14 +659,14 @@ class Compiler {
 			rendering.bouncy = true;
 			if (variant.shape === undefined || variant.shape === 'single') {
 				return (input, env) => {
-					const bound = lookup(env, distance) as Bound;
+					const bound = at(env);
 					const [ frames ] = callee(bound, env, input);
 					// Single-valued, as the shape says
 					return Bounce.of(body(bound) as Single, input, frames!);
 				};
 			}
 			return function*(input, env) {
-				const bound = lookup(env, distance) as Bound;
+				const bound = at(env);
 				const [ frames ] = callee(bound, env, input);
 				yield Tail.of(() => (body(bound) as Stream)(input, frames!));
 			};
@@ -641,13 +675,13 @@ class Compiler {
 			const apply = variant.bouncy ? settling : invoke;
 			const called = callee.task
 				? function*(input: Value, env: Env): Generator<Value, void, Resumed> {
-					const bound = lookup(env, distance) as Bound;
+					const bound = at(env);
 					yield* each(callee(bound, env, input), function*(frames) {
 						yield* apply(body(bound), input, frames);
 					});
 				}
 				: function*(input: Value, env: Env): Generator<Value, void, Resumed> {
-					const bound = lookup(env, distance) as Bound;
+					const bound = at(env);
 					for (const frames of callee(bound, env, input)) {
 						yield* apply(body(bound), input, frames);
 					}
@@ -656,13 +690,13 @@ class Compiler {
 		}
 		if (variant.bouncy) {
 			return (input, env) => {
-				const bound = lookup(env, distance) as Bound;
+				const bound = at(env);
 				const [ frames ] = callee(bound, env, input);
 				return settle((body(bound) as Single)(input, frames!));
 			};
 		}
 		return (input, env) => {
-			const bound = lookup(env, distance) as Bound;
+			const bound = at(env);
 			const [ frames ] = callee(bound, env, input);
 			// Settled as single-valued above, once the body was rendered
 			return (body(bound) as Single)(input, frames!);
@@ -756,6 +790,16 @@ class Compiler {
 	 * `assemble` puts the two together.
 	 */
 	private def<Result>(node: ast.Def, scope: Scope, rest: (inner: Scope, definition: Definition) => Result, assemble: (rest: Result, definition: Definition) => Result): Result {
+		const { inner, definition } = this.definition(node, scope);
+		return assemble(rest(inner, definition), definition);
+	}
+
+	/**
+	 * A definition's machinery, apart from where it sits — its binding, the scope its body renders
+	 * in, the lazy renderings — so `def` may nest it over a rest and the prelude may table it at
+	 * the root.
+	 */
+	private definition(node: ast.Def, scope: Scope): { inner: Scope; binding: DefBinding; definition: Definition } {
 		const key = `${node.name}/${node.params.length}`;
 		const binding: DefBinding = { kind: 'def', slot: scope.depth, def: node, variants: new Map(), pathVariants: new Map() };
 		const inner = scope.child();
@@ -846,7 +890,7 @@ class Compiler {
 			},
 			pathVariant: pathOf,
 		};
-		return assemble(rest(inner, definition), definition);
+		return { inner, binding, definition };
 	}
 
 	private readonly rest = (rest: Filter, definition: Definition): Filter => {

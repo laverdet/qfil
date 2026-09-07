@@ -2,8 +2,9 @@
  * The prelude: builtins written in the language itself, in scope of every program the runtime
  * compiles. Each definition reads as its jq documentation does, and a runtime laid over this one
  * gets them under its own semantics — `<` in `abs` is this runtime's order here and jq's in the
- * jq runtime, with nothing rewritten. The source is parsed once per process, lazily, and a body
- * is rendered only when a program first calls it, so an unused definition costs its binding alone.
+ * jq runtime, with nothing rewritten. The source is parsed once per process, lazily; a definition
+ * binds only when a program references it and its body renders only when first called, so an
+ * unused definition costs nothing.
  */
 import { once } from '#/compiler/filter.js';
 import { definitions } from '#/compiler/parser.js';

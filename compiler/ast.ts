@@ -191,14 +191,23 @@ export interface Bind extends Syntax {
 	readonly body: Node;
 }
 
-/** `def name(params): body; rest` */
-export interface Def extends Syntax {
+/**
+ * A definition as the parser stages it: the node exists before its body and rest are parsed, so
+ * that calls in them resolve to it, and they land on it as they complete.
+ */
+export interface StagedDef extends Syntax {
 	readonly type: 'def';
 	readonly name: string;
 	readonly params: readonly Param[];
+	body: Node;
+	rest: Node;
+	readonly at: number;
+}
+
+/** `def name(params): body; rest` */
+export interface Def extends StagedDef {
 	readonly body: Node;
 	readonly rest: Node;
-	readonly at: number;
 }
 
 /** A function parameter: a filter, or a value when written `$name`. */
@@ -211,6 +220,8 @@ export interface Call extends Syntax {
 	readonly type: 'call';
 	readonly name: string;
 	readonly args: readonly Node[];
+	/** What the parse resolved the name to lexically — a definition or parameter in scope; absent, the library's or undefined. */
+	readonly target?: Def | Param | undefined;
 	readonly at: number;
 }
 

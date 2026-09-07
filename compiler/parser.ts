@@ -39,9 +39,22 @@ function isDigit(code: number): boolean {
 	return code >= 0x30 && code <= 0x39;
 }
 
-/** Parses a jq program into its syntax tree. Throws {@link ParseError} on malformed input. */
-export function parse(source: string): ast.Node {
-	return new Parser(source).program();
+/**
+ * A prelude, parsed: its definitions in order, and its names — `name/arity` to the last
+ * definition of each — which is the root scope a program's parse resolves calls against.
+ */
+export interface Prelude {
+	readonly defs: readonly ast.Def[];
+	readonly names: ReadonlyMap<string, ast.Def>;
+}
+
+/**
+ * Parses a jq program into its syntax tree; calls resolve against the prelude's names where
+ * nothing closer binds them, as a program compiles over its runtime's prelude. Throws
+ * {@link ParseError} on malformed input.
+ */
+export function parse(source: string, prelude?: Prelude): ast.Node {
+	return new Parser(source, prelude).program();
 }
 
 /**
@@ -57,9 +70,12 @@ class Parser {
 	private readonly source: string;
 	private index = 0;
 	private noComma = false;
+	/** Function names in scope, innermost frame last: a call resolves to its definition or parameter here, as it is parsed. */
+	private readonly scopes: ReadonlyMap<string, ast.Def | ast.Param>[];
 
-	constructor(source: string) {
+	constructor(source: string, prelude?: Prelude) {
 		this.source = source;
+		this.scopes = [ prelude?.names ?? new Map<string, ast.Def>() ];
 	}
 
 	program(): ast.Node {
@@ -73,6 +89,17 @@ class Parser {
 			throw this.error('Unexpected token');
 		}
 		return node;
+	}
+
+	/** The innermost definition or parameter of the name, or undefined for the library's or nobody's. */
+	private resolve(key: string): ast.Def | ast.Param | undefined {
+		for (let ii = this.scopes.length - 1; ii >= 0; --ii) {
+			const found = this.scopes[ii]!.get(key);
+			if (found !== undefined) {
+				return found;
+			}
+		}
+		return undefined;
 	}
 
 	// pipe := comma ('|' pipe)?
@@ -355,13 +382,17 @@ class Parser {
 		if (this.accept('(')) {
 			const args = this.delimited(() => this.separated(';', () => this.pipe()));
 			this.expect(')');
-			return { type: 'call', name, args, at };
+			const target = this.resolve(`${name}/${args.length}`);
+			return { type: 'call', name, args, target, at };
 		}
 		switch (name) {
 			case 'true': return { type: 'literal', value: true, at };
 			case 'false': return { type: 'literal', value: false, at };
 			case 'null': return { type: 'literal', value: null, at };
-			default: return { type: 'call', name, args: [], at };
+			default: {
+				const target = this.resolve(`${name}/0`);
+				return { type: 'call', name, args: [], target, at };
+			}
 		}
 	}
 
@@ -437,13 +468,21 @@ class Parser {
 			this.expect(')');
 		}
 		this.expect(':');
-		const body = this.delimited(() => this.pipe());
+		// The node exists before its body parses, so calls resolve to it: itself in the body, and
+		// everything after the `;`. Its parameters are in scope for the body alone.
+		const node: ast.StagedDef = { type: 'def', name, params, body: { type: 'identity' }, rest: { type: 'identity' }, at };
+		this.scopes.push(new Map([ [ `${name}/${params.length}`, node ] ]));
+		this.scopes.push(new Map(params.map(param => [ `${param.name}/0`, param ])));
+		node.body = this.delimited(() => this.pipe());
+		this.scopes.pop();
 		this.expect(';');
 		this.skip();
 		if (this.index === this.source.length) {
 			throw this.error('Top-level program not given (try ".")');
 		}
-		return { type: 'def', name, params, body, rest: this.pipe(), at };
+		node.rest = this.pipe();
+		this.scopes.pop();
+		return node;
 	}
 
 	// object := '{' (entry (',' entry)* ','?)? '}'
@@ -740,16 +779,18 @@ class Parser {
 	}
 }
 
-/** Parses a source of definitions alone, as a runtime's prelude is written. */
-export function definitions(source: string): readonly ast.Def[] {
-	const defs: ast.Def[] = [];
-	let node = parse(`${source}\n.`);
+/** Parses a source of definitions alone, as a runtime's prelude is written, over `base` when one prelude lays itself over another. */
+export function definitions(source: string, base?: Prelude): Prelude {
+	const defs: ast.Def[] = base === undefined ? [] : [ ...base.defs ];
+	const names = new Map<string, ast.Def>(base?.names);
+	let node = parse(`${source}\n.`, base);
 	while (node.type === 'def') {
 		defs.push(node);
+		names.set(`${node.name}/${node.params.length}`, node);
 		node = node.rest;
 	}
 	if (node.type !== 'identity') {
 		throw new ParseError('A prelude is definitions only');
 	}
-	return defs;
+	return { defs, names };
 }

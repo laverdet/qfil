@@ -215,12 +215,19 @@ JavaScript flavor reads JSON Lines, and `-R` reads lines; nothing waits for the 
 ### The prelude
 
 Builtins that the language can define are defined in the language: `Runtime.prelude` is a
-function returning parsed definitions — `once(() => definitions(source))`, so the source is read
-when a program first compiles against it and never again — `abs`, `map_values`, `paths(f)`, `any`/`all`, `IN`/`INDEX`, `capture`,
-`scan`, the type filters — spliced in scope of every program compiled with that runtime, exactly
-as if the program began with them; its own definitions shadow them as inner scopes do. The source
-is parsed once per process, and a definition's body is rendered only when a program first calls
-it, so an unused builtin costs its binding alone. A runtime laid over another inherits its prelude
+function returning its parsed prelude — the definitions, and their names as the root scope —
+`once(() => definitions(source))`, so the source is read when a program first compiles against
+it and never again — `abs`, `map_values`, `paths(f)`, `any`/`all`, `IN`/`INDEX`, `capture`,
+`scan`, the type filters — in scope of every program compiled with that runtime, exactly as if
+the program began with them; its own definitions shadow them as inner scopes do. Resolution is
+the parse's: a call node carries the definition its name reached lexically, so the prelude's
+internal references are resolved once per process when its source is parsed, and a program's
+references into it as the program is parsed over the prelude's names. The prelude is never nested
+over the program: a definition binds only when a program references it, closed over the root so a
+call site holds it directly — no environment frames, no lookup walk — and its body is rendered
+only when a program first calls it, so an unused builtin costs nothing. A definition sees only
+the definitions above it and itself, because that is all its calls could resolve to. A runtime
+laid over another inherits its prelude
 by the same spread as everything else — or composes its own, as the jq flavor lays the date
 family over the JavaScript prelude — and the definitions take on the new runtime's semantics
 unrewritten: `abs` compares with jq's order under the jq runtime because `<` does.
@@ -256,7 +263,8 @@ only calls into a recursion pay for any of this; everything else compiles as bef
 ### Files
 
 - `compiler/parser.ts`, `compiler/ast.ts` — scannerless recursive descent to a plain syntax tree,
-  with jq's precedence.
+  with jq's precedence; a call resolves to the definition or parameter its name reaches as it is
+  parsed, against the runtime's prelude at the root.
 - `compiler/compiler.ts` — instantiation: environments, definitions, calls, binding forms, and the
   dispatch of everything else to the runtime.
 - `compiler/filter.ts` — the contract: `Value`, `Filter`, `Env`, `Render`, `Context`, `Runtime`,
