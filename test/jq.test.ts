@@ -129,7 +129,7 @@ describe('cli', () => {
 });
 
 agree('the extended mathematics', [
-	[ '[.[] | nearbyint, rint]', [ -1.7, 2.5, 3.5, -1.5, -2.5, 2.3 ] ],
+	[ '[.[] | nearbyint, rint]', [ -1.7, 2.5, 3.5, -1.5, -2.5, 2.3, -0.5 ] ],
 	[ '[.[] | exp2, exp10]', [ 0, 1, 2, 3, 0.1 ] ],
 	[ '[.[] | frexp, modf, significand, logb]', [ 7, 1, 48, 3.25, -3.25, 0.1 ] ],
 	[ '0 | logb' ],
@@ -145,7 +145,6 @@ agree('the extended mathematics', [
 
 divergent('a ulp astray from this libm, or refused outright', [
 	[ '[0.5, -0.5] | map(tgamma)', null, [ [ 1.7724538509055159, -3.5449077018110295 ] ] ],
-	[ '-0.5 | nearbyint', null, [ 0 ] ],
 	[ '1 | j0', null, 'error' ],
 	[ '1 | erf', null, 'error' ],
 	[ 'jn(2; 1)', null, 'error' ],
@@ -208,6 +207,9 @@ divergent('jq 1.8 quirks not followed', [
 	// The cost of that design: a fold whose state is a plain value cannot run in path mode, where
 	// jq's per-value tracking can — jq's own `limit` definition leans on it
 	[ '[path(foreach (.a, .b) as $x (2; . - 1; $x))]', { a: 1, b: 2 }, 'error' ],
+	// decNumber loses the sign negating a zero literal, though -1 * 0 keeps it; IEEE negation keeps both
+	[ '-0', null, [ -0 ] ],
+	[ '-0.0', null, [ -0 ] ],
 	// When a later `?//` pattern is tried inside a fold, jq 1.8.2 loses the state accumulated so far
 	// (it yields 1, 3, 3); the state before the failed update is kept
 	[ '[foreach ([1],2,{"a":3}) as [$a] ?// $a ?// {a: $a} (0; . + $a)]', null, [ [ 1, 3, 6 ] ] ],

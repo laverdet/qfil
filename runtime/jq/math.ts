@@ -15,13 +15,17 @@ const view = new DataView(new ArrayBuffer(8));
 function halfEven(value: number): number {
 	const low = Math.floor(value);
 	const diff = value - low;
-	if (diff < 0.5) {
-		return low;
-	} else if (diff > 0.5) {
-		return low + 1;
-	} else {
-		return low % 2 === 0 ? low : low + 1;
-	}
+	const rounded = function() {
+		if (diff < 0.5) {
+			return low;
+		} else if (diff > 0.5) {
+			return low + 1;
+		} else {
+			return low % 2 === 0 ? low : low + 1;
+		}
+	}();
+	// A negative rounding up to zero keeps its sign, as IEEE has it
+	return rounded === 0 && value < 0 ? -0 : rounded;
 }
 
 /** The fraction in [0.5, 1) and the exponent, read off the bits so nothing rounds. */

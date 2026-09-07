@@ -60,7 +60,7 @@ divergent('truth and numbers are JavaScript\'s', [
 	[ '5.7 % 2.2', null, [ 1.2999999999999998 ] ],
 	[ '[.[] | (1 / .)?]', [ 0, 1 ], [ [ 1.7976931348623157e+308, 1 ] ] ],
 	// Math.round rounds halves up; jq rounds them away from zero
-	[ '[.[] | round]', [ 2.5, 3.5, -1.5, -2.5, -0.5 ], [ [ 3, 4, -1, -2, 0 ] ] ],
+	[ '[.[] | round]', [ 2.5, 3.5, -1.5, -2.5, -0.5 ], [ [ 3, 4, -1, -2, -0 ] ] ],
 ]);
 
 divergent('what only the binary can say', [
@@ -68,7 +68,7 @@ divergent('what only the binary can say', [
 	[ 'have_literal_numbers', null, [ false ] ],
 	[ 'get_search_list', null, 'error' ],
 	[ '1 | j0', null, 'error' ],
-	// A ulp astray from this machine's libm, or a -0 the JSON printer cannot spell
+	// A ulp astray from this machine's libm
 	[ '27 | cbrt', null, [ 3 ] ],
 	[ '0.5 | atanh', null, [ 0.5493061443340548 ] ],
 	[ '2 | acosh', null, [ 1.3169578969248166 ] ],

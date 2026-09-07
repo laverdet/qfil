@@ -516,7 +516,7 @@ agree('the source of `as` runs up to a comma', [
 ]);
 
 agree('the math tail', [
-	[ '[.[] | fabs, ceil, floor, trunc]', [ -1.7, 2.5, 3.5, -1.5, -2.5, 2.3 ] ],
+	[ '[.[] | fabs, ceil, floor, trunc]', [ -1.7, 2.5, 3.5, -1.5, -2.5, 2.3, -0.4 ] ],
 	// The isfinite family is false on a non-number rather than an error, and nan is finite
 	[ '[1, infinite, nan, "a", null | isfinite, isinfinite, isnan, isnormal]' ],
 	[ '[1, infinite, nan | finites]' ],

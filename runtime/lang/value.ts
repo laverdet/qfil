@@ -84,7 +84,8 @@ export function describe(value: Value): string {
 
 /**
  * Writes a value as JSON, compact, and with `indent` spaces per level when asked. Infinite numbers
- * are written as the largest finite ones, as jq writes them; NaN is `null`, as JSON has nothing else.
+ * are written as the largest finite ones, as jq writes them; NaN is `null`, as JSON has nothing
+ * else; and -0 keeps its sign, which `JSON.stringify` would drop.
  */
 export function tojson(value: Value, indent?: number | string): string {
 	return JSON.stringify(value, replacer, indent);
@@ -93,6 +94,8 @@ export function tojson(value: Value, indent?: number | string): string {
 function replacer(this: unknown, _key: string, value: unknown): unknown {
 	if (typeof value === 'number' && !Number.isFinite(value) && !Number.isNaN(value)) {
 		return value > 0 ? Number.MAX_VALUE : -Number.MAX_VALUE;
+	} else if (value === 0 && Object.is(value, -0)) {
+		return JSON.rawJSON('-0');
 	}
 	return value;
 }
