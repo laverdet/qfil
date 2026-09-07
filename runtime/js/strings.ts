@@ -6,15 +6,15 @@ import type { Value } from '#/compiler/filter.js';
 import { values } from '#/compiler/filter.js';
 import { add, iterate } from '#/runtime/lang/intrinsics.js';
 import { assertArray, assertString, unary } from '#/runtime/lang/library.js';
-import { JqError, contains as containsOf, describe, equal, isNumber, isObject, tojson } from '#/runtime/lang/value.js';
+import { JqError, contains as containsOf, describe, equal, isNumber, isObject, isString, tojson } from '#/runtime/lang/value.js';
 
 /** Every offset of the needle — a substring, a subarray, an element — overlapping matches included. */
 function indicesOf(input: Value, needle: Value): Value {
 	if (input === null) {
 		return null;
-	} else if (typeof input === 'string' && typeof needle === 'string') {
+	} else if (isString(input) && isString(needle)) {
 		const found: number[] = [];
-		if (needle === '') {
+		if (needle.length === 0) {
 			return found;
 		}
 		for (let at = input.indexOf(needle); at !== -1; at = input.indexOf(needle, at + 1)) {
@@ -87,7 +87,7 @@ function joined(value: Value, separator: Value): Value {
 		const piece = function(): Value {
 			if (element === null) {
 				return '';
-			} else if (typeof element === 'string' || Array.isArray(element) || isObject(element)) {
+			} else if (isString(element) || Array.isArray(element) || isObject(element)) {
 				// A container is no string; `add` refuses it with both halves named, as jq's join does
 				return element;
 			} else {

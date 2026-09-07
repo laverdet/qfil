@@ -7,7 +7,7 @@ import type { Lib, Value } from '#/index.js';
 import * as assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { differential } from './harness.js';
-import { CompileError, JqError, constant, overload, promises, values } from '#/index.js';
+import { CompileError, JqError, Text, constant, overload, promises, values } from '#/index.js';
 import * as jqLib from '#/runtime/jq/index.js';
 import * as jqRuntime from '#/runtime/jq/runtime.js';
 import { fromjson as jqFromjson } from '#/runtime/jq/value.js';
@@ -1016,5 +1016,41 @@ describe('builtins', () => {
 		assert.ok(names.includes('length/0'));
 		assert.ok(names.includes('map_values/1'));
 		assert.ok(names.includes('atan2/2'));
+	});
+});
+
+/** An embedder's boxed values: a boxed `String` or `Number` counts as its value throughout the machinery. */
+describe('boxed values', () => {
+	const boxed = (text: string): Value => new Text(text) as unknown as Value;
+	const results = (filter: string, input: Value): Value => JSON.parse(tojson(run(filter, input) as Value[])) as Value;
+	it('counts a boxed String as a string', () => {
+		const abc = boxed('abc');
+		assert.deepEqual(
+			results('type, length, ., tostring, tojson, . == "abc", . < "abd", ltrimstr("a"), test("b"), (explode | implode)', abc),
+			[ 'string', 3, 'abc', 'abc', '"abc"', true, true, 'bc', true, 'abc' ],
+		);
+		assert.deepEqual(results('{(.): 1}', abc), [ { abc: 1 } ]);
+		assert.deepEqual(results('. + "!", ("x" + .)', abc), [ 'abc!', 'xabc' ]);
+		assert.deepEqual(results('.[1:], .[]?', abc), [ 'bc' ]);
+		assert.deepEqual(results('sort | unique', [ 'b', abc, 'abc', 'a' ]), [ [ 'a', 'abc', 'b' ] ]);
+		assert.deepEqual(results('try .[] catch "no"', abc), [ 'no' ]);
+		assert.deepEqual(results('splits("b")', abc), [ 'a', 'c' ]);
+	});
+	it('indexes and paths through a boxed key', () => {
+		const key = boxed('a');
+		assert.deepEqual(JSON.parse(tojson(run('.[$k], has($k)', { a: 1 }, { args: { k: key } }) as Value[])), [ 1, true ]);
+		assert.deepEqual(JSON.parse(tojson(run('setpath([$k]; 2) | del(.b)', { a: 1, b: 2 }, { args: { k: key } }) as Value[])), [ { a: 2 } ]);
+		assert.deepEqual(JSON.parse(tojson(run('.[$k] = 3', {}, { args: { k: key } }) as Value[])), [ { a: 3 } ]);
+	});
+	it('counts a plain boxed Number as a number', () => {
+		// eslint-disable-next-line no-new-wrappers -- the box is the point: an embedder's Number counts as its number
+		const five = new Number(5) as unknown as Value;
+		assert.deepEqual(results('type, . + 1, -., . == 5, length', five), [ 'number', 6, -5, true, 5 ]);
+		assert.deepEqual(JSON.parse(tojson(jq.run('-., 1 / .', five) as Value[])), [ -5, 0.2 ]);
+	});
+	it('answers each flavor\'s truth of an empty box', () => {
+		const empty = boxed('');
+		assert.deepEqual(results('[select(.), if . then "t" else "f" end]', empty), [ [ 'f' ] ]);
+		assert.deepEqual(JSON.parse(tojson(jq.run('[select(.), if . then "t" else "f" end]', empty) as Value[])), [ [ '', 't' ] ]);
 	});
 });

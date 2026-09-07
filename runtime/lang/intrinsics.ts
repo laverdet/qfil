@@ -4,7 +4,7 @@
  * the libraries are built on them too. Nothing here knows about syntax.
  */
 import type { Path, Value, ValueObject } from '#/compiler/filter.js';
-import { Halt, JqError, compareStrings, copyObject, describe, equal, isNumber, isObject, newObject, tojson, tostring, typeOf } from './value.js';
+import { Halt, JqError, compareStrings, copyObject, describe, equal, isNumber, isObject, isString, newObject, tojson, tostring, typeOf } from './value.js';
 
 export { Halt, JqError, equal, fromjson, tojson, tostring, typeOf } from './value.js';
 
@@ -44,11 +44,11 @@ export function element(value: Value, index: number): Value {
 
 /** `.[key]` for any key: a string, a number, or a slice `{start, end}`. */
 export function index(value: Value, key: Value): Value {
-	if (typeof key === 'string') {
+	if (isString(key)) {
 		return field(value, key);
 	} else if (isNumber(key)) {
 		return element(value, key);
-	} else if (isObject(key) && (value === null || Array.isArray(value) || typeof value === 'string')) {
+	} else if (isObject(key) && (value === null || Array.isArray(value) || isString(value))) {
 		return slice(value, key.start ?? null, key.end ?? null);
 	}
 	throw new JqError(`Cannot index ${typeOf(value)} with ${describe(key)}`);
@@ -60,7 +60,7 @@ export function slice(value: Value, from: Value, to: Value): Value {
 		return null;
 	} else if ((from !== null && !isNumber(from)) || (to !== null && !isNumber(to))) {
 		throw new JqError('Start and end indices of an array slice must be numbers');
-	} else if (typeof value === 'string' || Array.isArray(value)) {
+	} else if (isString(value) || Array.isArray(value)) {
 		const [ start, end ] = sliceBounds(value.length, from, to);
 		return value.slice(start, end);
 	}
@@ -129,7 +129,7 @@ export function keys(value: Value): Value {
 }
 
 export function has(value: Value, key: Value): boolean {
-	if (isObject(value) && typeof key === 'string') {
+	if (isObject(value) && isString(key)) {
 		return Object.hasOwn(value, key);
 	} else if (Array.isArray(value) && isNumber(key)) {
 		return key >= 0 && key < value.length;
@@ -138,7 +138,7 @@ export function has(value: Value, key: Value): boolean {
 }
 
 export function length(value: Value): number {
-	if (typeof value === 'string') {
+	if (isString(value)) {
 		return value.length;
 	} else if (isNumber(value)) {
 		return Math.abs(value);
@@ -160,8 +160,9 @@ export function add(left: Value, right: Value): Value {
 		return right;
 	} else if (right === null) {
 		return left;
-	} else if (typeof left === 'string' && typeof right === 'string') {
-		return left + right;
+	} else if (isString(left) && isString(right)) {
+		// Concatenation itself unwraps a box
+		return String(left) + String(right);
 	} else if (Array.isArray(left) && Array.isArray(right)) {
 		return [ ...left, ...right ];
 	} else if (isObject(left) && isObject(right)) {
@@ -182,9 +183,9 @@ export function subtract(left: Value, right: Value): Value {
 export function multiply(left: Value, right: Value): Value {
 	if (isNumber(left) && isNumber(right)) {
 		return left * right;
-	} else if (typeof left === 'string' && isNumber(right)) {
+	} else if (isString(left) && isNumber(right)) {
 		return repeat(left, right);
-	} else if (isNumber(left) && typeof right === 'string') {
+	} else if (isNumber(left) && isString(right)) {
 		return repeat(right, left);
 	} else if (isObject(left) && isObject(right)) {
 		return merge(left, right);
@@ -219,7 +220,7 @@ function merge(left: ValueObject, right: ValueObject): ValueObject {
 export function divide(left: Value, right: Value): Value {
 	if (isNumber(left) && isNumber(right)) {
 		return left / right;
-	} else if (typeof left === 'string' && typeof right === 'string') {
+	} else if (isString(left) && isString(right)) {
 		return split(left, right);
 	}
 	throw new JqError(`${describe(left)} and ${describe(right)} cannot be divided`);
@@ -227,7 +228,7 @@ export function divide(left: Value, right: Value): Value {
 
 /** `split(separator)` — an empty string splits into nothing. */
 export function split(text: string, separator: string): string[] {
-	return text === '' ? [] : text.split(separator);
+	return text.length === 0 ? [] : text.split(separator);
 }
 
 /** `%` as JavaScript has it: the floating-point remainder, NaN for a zero divisor; jq's integer remainder over intmax casts is the jq runtime's. */
@@ -247,8 +248,8 @@ export function negate(value: Value): Value {
 
 /** The key of an object construction, which must be a string. */
 export function toKey(value: Value): string {
-	if (typeof value === 'string') {
-		return value;
+	if (isString(value)) {
+		return String(value);
 	}
 	throw new JqError('Object keys must be strings');
 }
@@ -292,7 +293,7 @@ function setAt(value: Value, path: Value[], depth: number, replacement: Value): 
 
 /** A copy of `value` with `key` set — the one place a container is rebuilt around a new member. */
 function setKey(value: Value, key: Value, updated: Value): Value {
-	if (typeof key === 'string') {
+	if (isString(key)) {
 		const result = value === null ? newObject() : copyObject(value as ValueObject);
 		result[key] = updated;
 		return result;
@@ -359,9 +360,9 @@ function resolved(root: Value, path: Value[]): Value[] {
 	return path.map(key => {
 		const container = current;
 		current = function() {
-			if (typeof key === 'string') {
+			if (isString(key)) {
 				return isObject(container) ? field(container, key) : null;
-			} else if (Array.isArray(container) || typeof container === 'string') {
+			} else if (Array.isArray(container) || isString(container)) {
 				return index(container, key);
 			} else {
 				return null;
@@ -400,13 +401,13 @@ function comparePaths(left: Value[], right: Value[]): number {
 function compareKeys(left: Value, right: Value): number {
 	if (isNumber(left) && isNumber(right)) {
 		return left - right;
-	} else if (typeof left === 'string' && typeof right === 'string') {
+	} else if (isString(left) && isString(right)) {
 		return compareStrings(left, right);
 	}
 	const rank = (key: Value): number => {
 		if (isNumber(key)) {
 			return 0;
-		} else if (typeof key === 'string') {
+		} else if (isString(key)) {
 			return 1;
 		} else {
 			return 2;
@@ -433,7 +434,7 @@ function deleteAt(value: Value, path: Value[], depth: number): Value {
 }
 
 function deleteKey(value: Value, key: Value): Value {
-	if (typeof key === 'string') {
+	if (isString(key)) {
 		if (!isObject(value)) {
 			throw new JqError(`Cannot delete field at object index of ${typeOf(value)}`);
 		} else if (!Object.hasOwn(value, key)) {
@@ -504,7 +505,7 @@ export class Editor {
 		const key = path[depth]!;
 		const updated = this.setAt(index(value, key), path, depth + 1, replacement);
 		if (typeof value === 'object' && value !== null && this.owned.has(value)) {
-			if (typeof key === 'string') {
+			if (isString(key)) {
 				(value as ValueObject)[key] = updated;
 				return value;
 			} else if (isNumber(key)) {
@@ -554,8 +555,8 @@ export function keysOfOptional(value: Value): (number | string)[] {
 function cell(value: Value, what: string, write: (text: string) => string): string {
 	if (value === null) {
 		return '';
-	} else if (typeof value === 'string') {
-		return write(value);
+	} else if (isString(value)) {
+		return write(String(value));
 	} else if (typeof value === 'object' && !(value instanceof Number)) {
 		throw new JqError(`${describe(value)} is not valid in a ${what} row`);
 	} else {
@@ -573,7 +574,7 @@ function row(value: Value, what: string, separator: string, write: (text: string
 
 /** A `@sh` word: a string is single-quoted; a scalar stands as written; a container refuses. */
 function shWord(value: Value): string {
-	if (typeof value === 'string') {
+	if (isString(value)) {
 		return `'${value.replace(/'/g, "'\\''")}'`;
 	} else if (typeof value === 'object' && value !== null && !(value instanceof Number)) {
 		throw new JqError(`${describe(value)} can not be escaped for shell`);

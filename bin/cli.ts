@@ -10,7 +10,7 @@ import * as util from 'node:util';
 import { CompileError } from 'qfil/compiler/filter.js';
 import { ParseError } from 'qfil/compiler/parser.js';
 import { compile } from 'qfil/index.js';
-import { Halt, JqError, compareStrings, isObject, newObject, tojson } from 'qfil/runtime/lang/value.js';
+import { Halt, JqError, compareStrings, isObject, isString, newObject, tojson } from 'qfil/runtime/lang/value.js';
 
 export type Flags = Readonly<Record<string, string | boolean | undefined>>;
 
@@ -125,7 +125,7 @@ async function main(command: Command, argv: readonly string[]): Promise<number> 
 	const write = (value: Value) => {
 		last = value;
 		const sorted = flags['sort-keys'] === true ? sortKeys(value) : value;
-		const line = raw && typeof sorted === 'string' ? sorted : tojson(sorted, indent);
+		const line = raw && isString(sorted) ? String(sorted) : tojson(sorted, indent);
 		process.stdout.write(`${flags['ascii-output'] === true ? escapeNonAscii(line) : line}${separator}`);
 	};
 	const run = async (input: Value) => {

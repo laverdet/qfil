@@ -3,20 +3,20 @@
  * the canonical decimal form jq gives it: `1.000`, `1E+2`, `11.0` — until arithmetic touches it;
  * and values sort in jq's total order, null < false < true < numbers < strings < arrays < objects.
  *
- * A spelled number is a boxed `Number` that remembers its text, so JavaScript itself does the
+ * A `Numeral` is a boxed `Number` that remembers its text, so JavaScript itself does the
  * unwrapping: arithmetic, comparison and indexing coerce it, `JSON.stringify` writes the spelling
  * through the box's own `toJSON`, and the JavaScript runtime already counts a boxed `Number` as a
  * number. Nothing over there is any the wiser.
  */
 import type { Value, ValueObject } from '#/compiler/filter.js';
 import type { ValueType } from '#/runtime/lang/value.js';
-import { JqError, compareStrings, describe, isNumber, newObject, typeOf } from '#/runtime/lang/value.js';
+import { JqError, compareStrings, describe, isNumber, isString, newObject, typeOf } from '#/runtime/lang/value.js';
 
 /**
  * A number that remembers how it was spelled; a `Number` in every other respect. Only a decimal
  * literal is ever boxed, so the number is never NaN — at worst `1e1000`, an Infinity spelled `1E+1000`.
  */
-export class Spelled extends Number {
+export class Numeral extends Number {
 	readonly text: string;
 
 	constructor(value: number, text: string) {
@@ -27,6 +27,11 @@ export class Spelled extends Number {
 	/** Written into JSON verbatim, which is the point of remembering. */
 	toJSON(): unknown {
 		return JSON.rawJSON(this.text);
+	}
+
+	/** The spelling is the string of it, so `String(a boxed number)` reads the text back. */
+	override toString(): string {
+		return this.text;
 	}
 }
 
@@ -61,7 +66,7 @@ function canonical(text: string): string {
 export function spelled(value: number, text: string): Value {
 	const written = canonical(text);
 	// A boxed number is a `Value` in behavior; the contract's type cannot spell it
-	return written === String(value) ? value : new Spelled(value, written) as unknown as Value;
+	return written === String(value) ? value : new Numeral(value, written) as unknown as Value;
 }
 
 const literalRegex = /^-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
@@ -75,9 +80,9 @@ const numberRegex = /^[+-]?(?:(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?|nan|infinity)$/i
 
 /** `tonumber`: a string that is a decimal literal keeps its spelling; the rest read as C's strtod does. */
 export function tonumber(value: Value): Value {
-	if (typeof value === 'string') {
+	if (isString(value)) {
 		if (literalRegex.test(value)) {
-			return spelled(Number(value), value);
+			return spelled(Number(value), String(value));
 		} else if (numberRegex.test(value)) {
 			return Number(value);
 		}

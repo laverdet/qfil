@@ -6,7 +6,7 @@
  */
 import type * as ast from '#/compiler/ast.js';
 import type { Handler, Value } from '#/compiler/filter.js';
-import { Spelled, compare, spelled, truthy } from './value.js';
+import { compare, spelled, truthy } from './value.js';
 import { combine } from '#/compiler/filter.js';
 import { divide, negate as negateNumber } from '#/runtime/lang/intrinsics.js';
 import { alternativeOver, assignOver, binaryOver, ifOver, logicalOver, operators, sliceOver } from '#/runtime/lang/runtime.js';
@@ -20,10 +20,10 @@ function literalOf(node: ast.Literal): Value {
 	return typeof node.value === 'number' && node.text !== undefined ? spelled(node.value, node.text) : node.value;
 }
 
-/** Negation keeps the spelling, sign flipped. */
+/** Negation keeps the spelling, sign flipped: the string of a boxed number is its text. */
 function negated(value: Value): Value {
-	if (value instanceof Spelled) {
-		const { text } = value;
+	if (value instanceof Number) {
+		const text = String(value);
 		return spelled(-Number(value), text.startsWith('-') ? text.slice(1) : `-${text}`);
 	} else {
 		return negateNumber(value);

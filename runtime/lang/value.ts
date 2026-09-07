@@ -20,7 +20,7 @@ export class JqError extends Error {
 	readonly value: Value;
 
 	constructor(value: Value) {
-		super(typeof value === 'string' ? value : `${tojson(value)} (not a string)`);
+		super(isString(value) ? String(value) : `${tojson(value)} (not a string)`);
 		this.value = value;
 	}
 }
@@ -47,6 +47,8 @@ export function typeOf(value: Value): ValueType {
 		return 'array';
 	} else if (value instanceof Number) {
 		return 'number';
+	} else if (value instanceof String) {
+		return 'string';
 	} else {
 		return 'object';
 	}
@@ -57,9 +59,22 @@ export function isNumber(value: Value): value is number {
 	return typeof value === 'number' || value instanceof Number;
 }
 
-export function isObject(value: Value): value is ValueObject {
-	return typeof value === 'object' && value !== null && !Array.isArray(value) && !(value instanceof Number);
+/** A string, boxed or not: a boxed `String` behaves as its characters wherever they are read, and the type says as much. */
+export function isString(value: Value): value is string {
+	return typeof value === 'string' || value instanceof String;
 }
+
+export function isObject(value: Value): value is ValueObject {
+	return typeof value === 'object' && value !== null && !Array.isArray(value) && !(value instanceof Number) && !(value instanceof String);
+}
+
+/**
+ * A string an embedder boxes, to carry more than its characters — as the jq flavor's `Numeral`
+ * carries a number's spelling on a boxed `Number`. The machinery counts any boxed `String` as a
+ * string, `isString` says so, and an operation that makes a new string unwraps to a plain one;
+ * this class is the sanctioned base for an embedder's brands. Nothing in the runtimes makes one.
+ */
+export class Text extends String {}
 
 /** A value as an error message names it: `number (1)`, `string ("abc…)`. */
 export function describe(value: Value): string {
@@ -92,15 +107,17 @@ export function fromjson(text: string): Value {
 
 /** Strings are themselves; anything else is its JSON. */
 export function tostring(value: Value): string {
-	return typeof value === 'string' ? value : tojson(value);
+	return isString(value) ? String(value) : tojson(value);
 }
 
-/** Strings against strings, by code unit, which every ordering shares. */
+/** Strings against strings, by code unit, which every ordering shares; a box compares as its characters. */
 export function compareStrings(left: string, right: string): number {
-	if (left === right) {
+	const lhs = String(left);
+	const rhs = String(right);
+	if (lhs === rhs) {
 		return 0;
 	} else {
-		return left < right ? -1 : 1;
+		return lhs < rhs ? -1 : 1;
 	}
 }
 
@@ -111,6 +128,10 @@ export function equal(left: Value, right: Value): boolean {
 	} else if (isNumber(left)) {
 		return isNumber(right) && Number(left) === Number(right);
 	} else if (isNumber(right)) {
+		return false;
+	} else if (isString(left)) {
+		return isString(right) && String(left) === String(right);
+	} else if (isString(right)) {
 		return false;
 	} else if (typeof left !== 'object' || typeof right !== 'object' || left === null || right === null) {
 		return false;
@@ -139,7 +160,7 @@ export function contains(left: Value, right: Value): boolean {
 }
 
 function containedIn(left: Value, right: Value): boolean {
-	if (typeof left === 'string' && typeof right === 'string') {
+	if (isString(left) && isString(right)) {
 		return left.includes(right);
 	} else if (Array.isArray(left) && Array.isArray(right)) {
 		return right.every(element => left.some(item => containedIn(item, element)));

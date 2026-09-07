@@ -22,7 +22,7 @@ import { assertArray, assertNumber, assertString, unary, withFilter, withPath } 
 import { ordered } from '#/runtime/lang/order.js';
 import { matching, regex } from '#/runtime/lang/regexp.js';
 import { conditionals } from '#/runtime/lang/truth.js';
-import { JqError, describe, fromjson as fromjsonOf, isNumber, isObject, newObject, tojson as tojsonOf, tostring as tostringOf, typeOf } from '#/runtime/lang/value.js';
+import { JqError, describe, fromjson as fromjsonOf, isNumber, isObject, isString, newObject, tojson as tojsonOf, tostring as tostringOf, typeOf } from '#/runtime/lang/value.js';
 
 export * from './date.js';
 export * from './math.js';
@@ -177,7 +177,7 @@ export const tostring = unary(tostringOf);
 export const tonumber = unary(input => {
 	if (isNumber(input)) {
 		return input;
-	} else if (typeof input === 'string') {
+	} else if (isString(input)) {
 		return Number(input);
 	}
 	throw new JqError(`${describe(input)} cannot be parsed as a number`);

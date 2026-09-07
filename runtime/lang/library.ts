@@ -5,14 +5,14 @@
  */
 import type * as ast from '#/compiler/ast.js';
 import type { Filter, LibFunction, PathFilter, Render, Stream, Value } from '#/compiler/filter.js';
-import { JqError, describe, isNumber } from './value.js';
+import { JqError, describe, isNumber, isString } from './value.js';
 import { values } from '#/compiler/filter.js';
 
 export function assertString(value: Value, what: string): string {
-	if (typeof value !== 'string') {
+	if (!isString(value)) {
 		throw new JqError(`${what} input must be a string`);
 	}
-	return value;
+	return String(value);
 }
 
 export function assertArray(value: Value, what: string): Value[] {

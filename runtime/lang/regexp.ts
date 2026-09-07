@@ -9,16 +9,16 @@ import type * as ast from '#/compiler/ast.js';
 import type { Env, LibFunction, Render, Stream, Value, ValueObject } from '#/compiler/filter.js';
 import { split } from './intrinsics.js';
 import { assertString } from './library.js';
-import { JqError, describe, newObject } from './value.js';
+import { JqError, describe, isString, newObject } from './value.js';
 import { constant, overload, streams, values } from '#/compiler/filter.js';
 
 /** Builds the RegExp of a match call: what the pattern and flags mean is the library's to say — JavaScript's reading here, jq's in the jq library. */
 export type RegexCompiler = (pattern: Value, flags: Value, extra: string) => RegExp;
 
 export function regex(pattern: Value, flags: Value, extra = ''): RegExp {
-	if (typeof pattern !== 'string') {
+	if (!isString(pattern)) {
 		throw new JqError(`${describe(pattern)} cannot be matched, as it is not a string`);
-	} else if (flags !== null && typeof flags !== 'string') {
+	} else if (flags !== null && !isString(flags)) {
 		throw new JqError(`${describe(flags)} is not a string`);
 	}
 	try {
@@ -113,7 +113,7 @@ function *substitute(regex: RegExp, input: Value, replacement: (groups: Value) =
 	const edits = execAll(regex, text).map(match => ({
 		start: match.index,
 		end: match.index + match[0].length,
-		outputs: [ ...replacement(namedGroups(match)) ].map(output => typeof output === 'string' ? output : function() {
+		outputs: [ ...replacement(namedGroups(match)) ].map(output => isString(output) ? String(output) : function() {
 			throw new JqError(`${describe(output)} cannot be added to a string`);
 		}()),
 	}));

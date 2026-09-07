@@ -165,8 +165,12 @@ scanned as leniently as jq's own scanner reads C doubles (`01`, `+1`, `5.`, `nan
 any case), and a number that is already spelled canonically is never boxed. A spelled number is a
 boxed `Number` that remembers its text, so JavaScript itself does
 the unwrapping — arithmetic, comparison and indexing coerce it — and `JSON.stringify` writes the
-spelling through the box's own `toJSON`. The JavaScript runtime counts a boxed `Number` as a
-number (`isNumber`, `typeOf`, `equal`), a JavaScript-native courtesy; it never makes one.
+spelling through the box's own `toJSON`. The machinery counts a boxed `Number` as a number and a
+boxed `String` as a string (`isNumber`, `isString`, `typeOf`, `equal`), a JavaScript-native
+courtesy; it makes no box of its own beyond the jq flavor's spelled numbers. `Text` is the
+sanctioned base for an embedder's branded strings — a value that behaves as a string everywhere
+while carrying more than its characters — and an operation that makes a new string unwraps to a
+plain one, as arithmetic unwraps a spelled number.
 
 ### Filters that await
 
