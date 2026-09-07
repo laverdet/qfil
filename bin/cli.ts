@@ -14,6 +14,11 @@ import { Halt, JqError, compareStrings, isObject, isString, newObject, tojson } 
 
 export type Flags = Readonly<Record<string, string | boolean | undefined>>;
 
+/** A command line the binary cannot read; `execute` answers with the message and the usage. */
+class UsageError extends Error {
+	override name = 'UsageError';
+}
+
 export interface Command {
 	/** The binary's name: its error prefix. */
 	readonly name: string;
@@ -83,13 +88,38 @@ function namedArguments(argv: readonly string[]): { args: Record<string, Value>;
 	return { args, rest };
 }
 
+/**
+ * The command line, read leniently off `parseArgs`'s tokens: a known option is a flag, and an
+ * unknown one beginning like a number — `-1`, `-.5` — is the filter it spells, as jq reads it;
+ * anything else unknown refuses with its name.
+ */
+function parsed(argv: readonly string[], options: Readonly<Record<string, { readonly type: 'boolean' | 'string' }>>): { flags: Flags; positionals: string[] } {
+	const { tokens } = util.parseArgs({ args: [ ...argv ], allowPositionals: true, strict: false, tokens: true, options });
+	const flags: Record<string, string | boolean | undefined> = {};
+	const positionals: string[] = [];
+	const lifted = new Set<number>();
+	for (const token of tokens) {
+		if (token.kind === 'positional') {
+			positionals.push(token.value);
+		} else if (token.kind === 'option') {
+			if (Object.hasOwn(options, token.name)) {
+				flags[token.name] = options[token.name]!.type === 'boolean' ? true : token.value;
+			} else if (lifted.has(token.index)) {
+				// Another piece of an argument already taken whole as a positional
+			} else if (/^-(?:\d|\.\d)/.test(argv[token.index]!)) {
+				lifted.add(token.index);
+				positionals.push(argv[token.index]!);
+			} else {
+				throw new UsageError(`Unknown option ${token.rawName}`);
+			}
+		}
+	}
+	return { flags, positionals };
+}
+
 async function main(command: Command, argv: readonly string[]): Promise<number> {
 	const { args, rest } = namedArguments(argv);
-	const { values: flags, positionals } = util.parseArgs({
-		args: rest,
-		allowPositionals: true,
-		options: { ...sharedOptions, ...command.options },
-	});
+	const { flags, positionals } = parsed(rest, { ...sharedOptions, ...command.options });
 	if (flags.help === true) {
 		process.stdout.write(command.usage);
 		return 0;
@@ -162,7 +192,10 @@ export async function execute(command: Command, argv: readonly string[]): Promis
 	try {
 		return await main(command, argv);
 	} catch (error) {
-		if (error instanceof Halt) {
+		if (error instanceof UsageError) {
+			process.stderr.write(`${command.name}: ${error.message}\n${command.usage}`);
+			return 2;
+		} else if (error instanceof Halt) {
 			if (error.value !== undefined) {
 				process.stderr.write(typeof error.value === 'string' ? error.value : `${tojson(error.value)}\n`);
 			}
