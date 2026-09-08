@@ -46,7 +46,7 @@ function regexOf(compile: RegexCompiler, render: Render, pattern: ast.Node, flag
 		return function*(input, env, body) {
 			for (const pair of args(input, env)) {
 				const [ re, fl ] = pair as [ Value, Value ];
-				if (last?.re !== re || last.fl !== fl) {
+				if (last === null || last.re !== re || last.fl !== fl) {
 					last = { re, fl, compiled: compile(re, fl, extra) };
 				}
 				yield* body(last.compiled, input);
@@ -153,7 +153,7 @@ function subFunction(compile: RegexCompiler, extra: string): LibFunction {
 	);
 }
 
-function *testWith(compiled: RegExp, input: Value): Generator<Value> {
+function *testWith(compiled: RegExp, input: Value): Generator {
 	yield ignoresEmpty(compiled) ? execAll(compiled, input).length > 0 : compiled.test(assertString(input, 'test'));
 }
 
@@ -170,7 +170,7 @@ function matchNames(match: RegExpExecArray): (string | null)[] {
 	return match.indices!.slice(1).map(range => range === undefined ? null : byRange.get(range) ?? null);
 }
 
-function *splitWith(compiled: RegExp, input: Value): Generator<Value> {
+function *splitWith(compiled: RegExp, input: Value): Generator {
 	const text = assertString(input, 'split');
 	const pieces: string[] = [];
 	let previous = 0;

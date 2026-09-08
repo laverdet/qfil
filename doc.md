@@ -40,8 +40,13 @@ implementation deliberately differs:
   empty string, 0 and NaN are false, so `if`, `and`/`or`, `//`, `select` and `toboolean` follow),
   `tonumber` is `Number()` (NaN where nothing parses, rather than an error), `round` is
   `Math.round`, and `/` and `%` are IEEE — a zero divisor gives an infinity or NaN, `%` is the
-  floating-point remainder. The jq runtime keeps jq's truth, C's strtod, rounding away from zero,
-  and the zero-divisor errors.
+  floating-point remainder — and `undefined` is a value, as JavaScript has it: a missing member
+  reads as `undefined` rather than null (`{} | .a | type` is `"undefined"`, and `[] | first`,
+  `$ENV.missing`, an unmatched destructuring all follow), an object holds one where JSON never
+  writes it (`{} | {a: .a}` prints `{}`; in an array it writes `null`), it is falsy, and the
+  `undefined` filter yields it. The jq runtime keeps jq's truth, C's strtod, rounding away from
+  zero, and the zero-divisor errors; its missing members read as null, and its `undefined` is
+  exactly that — the name refuses as any unknown one does.
 - Objects are plain JavaScript objects, so integer-like keys iterate first (`{"b":1,"1":2}` writes as
   `{"1":2,"b":1}`). Every object the language makes has a null prototype, so `__proto__` is an
   ordinary key.
@@ -170,7 +175,10 @@ boxed `String` as a string (`isNumber`, `isString`, `typeOf`, `equal`), a JavaSc
 courtesy; it makes no box of its own beyond the jq flavor's spelled numbers. `Text` is the
 sanctioned base for an embedder's branded strings — a value that behaves as a string everywhere
 while carrying more than its characters — and an operation that makes a new string unwraps to a
-plain one, as arithmetic unwraps a spelled number.
+plain one, as arithmetic unwraps a spelled number. The `Value` type itself is `unknown`: a
+library function may return anything JavaScript has — a bigint, a symbol, an embedder's own
+objects — and it flows untouched, equal by identity, `type`d as `typeof` says, a bigint printing
+its digits and the unprintable written as JavaScript speaks it.
 
 ### Filters that await
 

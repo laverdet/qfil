@@ -7,7 +7,7 @@
 import type { LibFunction } from '#/compiler/filter.js';
 import { oniguruma } from './regexp.js';
 import { compare, fromjson as fromjsonOf, tonumber as tonumberOf, truthy } from './value.js';
-import { assertString, unary } from '#/runtime/lang/library.js';
+import { assertString, getpathOver, unary } from '#/runtime/lang/library.js';
 import { ordered } from '#/runtime/lang/order.js';
 import { matching } from '#/runtime/lang/regexp.js';
 import { conditionals } from '#/runtime/lang/truth.js';
@@ -22,6 +22,11 @@ export { match } from './regexp.js';
 const leading = /^[\s\u0085]+/;
 const trailing = /[\s\u0085]+$/;
 
+// `undefined` is the JavaScript flavor's word; here it is exactly that, and the name refuses as any unknown one does
+const undefinedOf = undefined;
+export { undefinedOf as undefined };
+// A missing member reads as null here, where the JavaScript flavor reads undefined
+export const getpath = getpathOver(null);
 const conds = conditionals(truthy);
 export const { not, select, until, any, all } = conds;
 const { while: whileOf } = conds;

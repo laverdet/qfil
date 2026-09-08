@@ -7,7 +7,7 @@
 import type * as ast from '#/compiler/ast.js';
 import type { Env, Filter, Handler, Path, PathFilter, Render, Resumed, Value } from '#/compiler/filter.js';
 import * as intrinsics from './intrinsics.js';
-import { equal } from './value.js';
+import { equal, newObject } from './value.js';
 import { abreast, combine, combineStreams, each, feed, firstOf, generator, isStream, isTask, over, task } from '#/compiler/filter.js';
 
 export type Operators = Readonly<Record<ast.BinaryOperator, (left: Value, right: Value) => Value>>;
@@ -35,7 +35,7 @@ export function binaryOver(ops: Operators): Handler<ast.Binary> {
 		// The right operand varies slowest, as jq has it
 		value: (node, render) => {
 			const op = ops[node.op];
-			return combine([ render.filter(node.left), render.filter(node.right) ], ([ left, right ]) => op(left!, right!), 'last');
+			return combine([ render.filter(node.left), render.filter(node.right) ], ([ left, right ]) => op(left, right), 'last');
 		},
 	};
 }
@@ -56,7 +56,7 @@ export function sliceOver(bound: (value: Value) => Value): Handler<ast.Slice> {
 				render.filter(node.to ?? nullLiteral),
 				render.filter(node.from ?? nullLiteral),
 			],
-			([ value, to, from ]) => intrinsics.slice(value!, bound(from!), bound(to!)),
+			([ value, to, from ]) => intrinsics.slice(value, bound(from), bound(to)),
 			'last',
 		),
 		path: (node, render) => {
@@ -64,7 +64,7 @@ export function sliceOver(bound: (value: Value) => Value): Handler<ast.Slice> {
 				render.filter(node.to ?? nullLiteral),
 				render.filter(node.from ?? nullLiteral),
 			], function*([ to, from ]) {
-				yield { __proto__: null, start: bound(from!), end: bound(to!) };
+				yield { __proto__: null, start: bound(from), end: bound(to) };
 			}, 'last');
 			const targets = render.path(node.target);
 			if (isTask(bounds) || isTask(targets)) {
@@ -86,6 +86,73 @@ export function sliceOver(bound: (value: Value) => Value): Handler<ast.Slice> {
 					}
 				};
 			}
+		},
+	};
+}
+
+/** One key of a path expression: the key evaluated against the input, then the target's paths each extended by it. */
+function pathThrough(render: Render, target: ast.Node, key: ast.Node, read: (value: Value, key: Value) => Value, extension: (key: Value) => Value): PathFilter {
+	const keys = generator(render.filter(key));
+	const targets = render.path(target);
+	if (isTask(keys) || isTask(targets)) {
+		return task(function*(path, value, env) {
+			yield* each(keys(value, env), function*(kk) {
+				yield* each(targets(path, value, env), function*(pair) {
+					yield [ extend(pair[0], extension(kk)), read(pair[1], kk) ] as [ Path, Value ];
+				});
+			});
+		});
+	} else {
+		return function*(path, value, env) {
+			for (const kk of keys(value, env)) {
+				for (const [ pp, vv ] of targets(path, value, env)) {
+					yield [ extend(pp, extension(kk)), read(vv, kk) ];
+				}
+			}
+		};
+	}
+}
+
+/** The index handler — `.foo`, `.[key]` — over what a missing member reads as: undefined in the js flavor, null in jq's. */
+export function indexOver(absent: Value): Handler<ast.Index> {
+	return {
+		// The key is evaluated first and varies slowest, as jq has it
+		value: (node, render) => {
+			const target = render.filter(node.target);
+			if (node.key.type === 'literal' && typeof node.key.value === 'string') {
+				const name = node.key.value;
+				return combine([ target ], ([ value ]) => intrinsics.field(value, name, absent));
+			} else if (node.key.type === 'literal' && typeof node.key.value === 'number') {
+				const index = node.key.value;
+				return combine([ target ], ([ value ]) => intrinsics.element(value, index, absent));
+			} else {
+				return combine([ target, render.filter(node.key) ], ([ value, key ]) => intrinsics.index(value, key, absent), 'last');
+			}
+		},
+		path: (node, render) => pathThrough(render, node.target, node.key, (value, key) => intrinsics.index(value, key, absent), key => key),
+	};
+}
+
+/** The object construction handler over the same reading: `{a}` is `{a: .a}`, and what a missing `.a` is comes from the flavor. */
+export function objectOver(absent: Value): Handler<ast.ObjectCons> {
+	return {
+		// Entries in order, the first varying slowest, each key before its value
+		value: (node, render) => {
+			const filters = node.entries.flatMap(entry => {
+				const key = render.filter(entry.key);
+				if (entry.value !== null) {
+					return [ key, render.filter(entry.value) ];
+				}
+				// `{a}` is `{a: .a}`; `{$x}` is `{x: $x}`, which the parser spells with a variable value
+				return [ key, combine([ key ], ([ name ], input) => intrinsics.index(input, name, absent)) ];
+			});
+			return combine(filters, values => {
+				const object = newObject();
+				for (let ii = 0; ii < values.length; ii += 2) {
+					object[intrinsics.toKey(values[ii])] = values[ii + 1]!;
+				}
+				return object;
+			});
 		},
 	};
 }
@@ -239,8 +306,8 @@ export function ifOver(truthy: Truthy): Handler<ast.If> {
 	};
 }
 
-/** The assignment handler over the operators — `+=` and its kin combine through them — and a truthiness, for `//=`. */
-export function assignOver(ops: Operators, truthy: Truthy): Handler<ast.Assign> {
+/** The assignment handler over the operators — `+=` and its kin combine through them — a truthiness, for `//=`, and the flavor's absent reading. */
+export function assignOver(ops: Operators, truthy: Truthy, absent: Value = undefined): Handler<ast.Assign> {
 	return {
 		value: (node, render) => {
 			const paths = render.path(node.left);
@@ -250,21 +317,21 @@ export function assignOver(ops: Operators, truthy: Truthy): Handler<ast.Assign> 
 				const update = generator(right);
 				if (isTask(paths) || isTask(update)) {
 					return task(function*(input, env) {
-						const editor = new intrinsics.Editor(input);
+						const editor = new intrinsics.Editor(input, absent);
 						const deletions: Path[] = [];
 						yield* each(paths([], input, env), function*(pair) {
 							const output = yield* firstOf(update(editor.get(pair[0]), env));
 							if (output === undefined) {
 								deletions.push(pair[0]);
 							} else {
-								editor.set(pair[0], output);
+								editor.set(pair[0], output[0]);
 							}
 						});
 						yield intrinsics.delpaths(editor.result(), deletions);
 					});
 				} else {
 					return (input, env) => {
-						const editor = new intrinsics.Editor(input);
+						const editor = new intrinsics.Editor(input, absent);
 						const deletions: Path[] = [];
 						for (const [ path ] of paths([], input, env)) {
 							const outputs = update(editor.get(path), env)[Symbol.iterator]().next();
@@ -289,7 +356,7 @@ export function assignOver(ops: Operators, truthy: Truthy): Handler<ast.Assign> 
 				}();
 				if (isTask(paths) || isTask(right)) {
 					return abreast(generator(right), function*(value, input, env) {
-						const editor = new intrinsics.Editor(input);
+						const editor = new intrinsics.Editor(input, absent);
 						yield* feed(paths([], input, env), pair => {
 							editor.set(pair[0], combineWith(editor.get(pair[0]), value));
 						});
@@ -297,9 +364,9 @@ export function assignOver(ops: Operators, truthy: Truthy): Handler<ast.Assign> 
 					});
 				} else {
 					return combine([ right ], ([ value ], input, env) => {
-						const editor = new intrinsics.Editor(input);
+						const editor = new intrinsics.Editor(input, absent);
 						for (const [ path ] of paths([], input, env)) {
-							editor.set(path, combineWith(editor.get(path), value!));
+							editor.set(path, combineWith(editor.get(path), value));
 						}
 						return editor.result();
 					});

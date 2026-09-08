@@ -5,8 +5,9 @@
  */
 import type * as ast from '#/compiler/ast.js';
 import type { Filter, LibFunction, PathFilter, Render, Stream, Value } from '#/compiler/filter.js';
+import { getpath } from './intrinsics.js';
 import { JqError, describe, isNumber, isString } from './value.js';
-import { values } from '#/compiler/filter.js';
+import { runtimePathFunction, values } from '#/compiler/filter.js';
 
 export function assertString(value: Value, what: string): string {
 	if (!isString(value)) {
@@ -32,6 +33,21 @@ export function assertNumber(value: Value, what: string): number {
 /** A library function of the input alone. */
 export function unary(fn: (input: Value) => Value): LibFunction {
 	return _render => input => fn(input);
+}
+
+/** `getpath`, over what a missing member reads as: its value form, and its path form extending the prefix. */
+export function getpathOver(absent: Value): LibFunction {
+	return runtimePathFunction(
+		values((input, path) => getpath(input, path, absent)),
+		(render, path) => {
+			const paths = render.generator(path);
+			return function*(prefix, value, env) {
+				for (const sub of paths(value, env)) {
+					yield [ [ ...prefix, ...sub as Value[] ], getpath(value, sub, absent) ];
+				}
+			};
+		},
+	);
 }
 
 /** A filter argument run over the input, as `map(f)` and `select(f)` take one. */

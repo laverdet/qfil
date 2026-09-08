@@ -4,7 +4,7 @@
  * the libraries are built on them too. Nothing here knows about syntax.
  */
 import type { Path, Value, ValueObject } from '#/compiler/filter.js';
-import { Halt, JqError, compareStrings, copyObject, describe, equal, isNumber, isObject, isString, newObject, tojson, tostring, typeOf } from './value.js';
+import { Halt, JqError, compareStrings, copyObject, describe, equal, isArray, isNumber, isObject, isString, newObject, tojson, tostring, typeOf } from './value.js';
 
 export { Halt, JqError, equal, fromjson, tojson, tostring, typeOf } from './value.js';
 
@@ -20,35 +20,35 @@ export function error(value: Value): never {
 	throw new JqError(value);
 }
 
-/** `.name` */
-export function field(value: Value, name: string): Value {
-	if (value === null) {
-		return null;
+/** `.name`; `absent` is what a missing member reads as — undefined, or null where a flavor says so. */
+export function field(value: Value, name: string, absent: Value = undefined): Value {
+	if (value == null) {
+		return value;
 	} else if (isObject(value)) {
-		return Object.hasOwn(value, name) ? value[name]! : null;
+		return Object.hasOwn(value, name) ? value[name]! : absent;
 	}
 	throw new JqError(`Cannot index ${typeOf(value)} with ${describe(name)}`);
 }
 
 /** `.[index]` on an array; a fractional index truncates and a negative one counts from the end. */
-export function element(value: Value, index: number): Value {
-	if (value === null) {
-		return null;
+export function element(value: Value, index: number, absent: Value = undefined): Value {
+	if (value == null) {
+		return value;
 	} else if (Array.isArray(value)) {
 		const whole = Math.trunc(index);
 		const at = whole < 0 ? value.length + whole : whole;
-		return at >= 0 && at < value.length ? value[at]! : null;
+		return at >= 0 && at < value.length ? value[at] : absent;
 	}
 	throw new JqError(`Cannot index ${typeOf(value)} with ${describe(index)}`);
 }
 
 /** `.[key]` for any key: a string, a number, or a slice `{start, end}`. */
-export function index(value: Value, key: Value): Value {
+export function index(value: Value, key: Value, absent: Value = undefined): Value {
 	if (isString(key)) {
-		return field(value, key);
+		return field(value, key, absent);
 	} else if (isNumber(key)) {
-		return element(value, key);
-	} else if (isObject(key) && (value === null || Array.isArray(value) || isString(value))) {
+		return element(value, key, absent);
+	} else if (isObject(key) && (value == null || Array.isArray(value) || isString(value))) {
 		return slice(value, key.start ?? null, key.end ?? null);
 	}
 	throw new JqError(`Cannot index ${typeOf(value)} with ${describe(key)}`);
@@ -56,8 +56,8 @@ export function index(value: Value, key: Value): Value {
 
 /** `.[from:to]` — of an array or string. Bounds are clamped; negative ones count from the end. */
 export function slice(value: Value, from: Value, to: Value): Value {
-	if (value === null) {
-		return null;
+	if (value == null) {
+		return value;
 	} else if ((from !== null && !isNumber(from)) || (to !== null && !isNumber(to))) {
 		throw new JqError('Start and end indices of an array slice must be numbers');
 	} else if (isString(value) || Array.isArray(value)) {
@@ -80,7 +80,7 @@ function sliceBounds(length: number, from: number | null, to: number | null): [ 
 
 /** `.[]` — the elements of an array or the values of an object. */
 export function iterate(value: Value): Iterable<Value> {
-	if (Array.isArray(value)) {
+	if (isArray(value)) {
 		return value;
 	} else if (isObject(value)) {
 		return Object.values(value);
@@ -89,7 +89,7 @@ export function iterate(value: Value): Iterable<Value> {
 }
 
 /** `..`: a value and everything beneath it, depth first. */
-export function *recurse(value: Value): Generator<Value> {
+export function *recurse(value: Value): Generator {
 	yield value;
 	if (Array.isArray(value) || isObject(value)) {
 		for (const child of iterate(value)) {
@@ -142,7 +142,7 @@ export function length(value: Value): number {
 		return value.length;
 	} else if (isNumber(value)) {
 		return Math.abs(value);
-	} else if (typeof value === 'boolean') {
+	} else if (typeof value === 'boolean' || value === undefined) {
 		throw new JqError(`${describe(value)} has no length`);
 	} else if (value === null) {
 		return 0;
@@ -163,7 +163,7 @@ export function add(left: Value, right: Value): Value {
 	} else if (isString(left) && isString(right)) {
 		// Concatenation itself unwraps a box
 		return String(left) + String(right);
-	} else if (Array.isArray(left) && Array.isArray(right)) {
+	} else if (isArray(left) && isArray(right)) {
 		return [ ...left, ...right ];
 	} else if (isObject(left) && isObject(right)) {
 		return Object.assign(copyObject(left), right);
@@ -266,13 +266,13 @@ function assertPath(path: Value): Value[] {
 	}
 }
 
-export function getpath(value: Value, path: Value): Value {
+export function getpath(value: Value, path: Value, absent: Value = undefined): Value {
 	let current = value;
 	for (const key of assertPath(path)) {
-		if (current === null) {
-			return null;
+		if (current == null) {
+			return current;
 		}
-		current = index(current, key);
+		current = index(current, key, absent);
 	}
 	return current;
 }
@@ -294,11 +294,11 @@ function setAt(value: Value, path: Value[], depth: number, replacement: Value): 
 /** A copy of `value` with `key` set — the one place a container is rebuilt around a new member. */
 function setKey(value: Value, key: Value, updated: Value): Value {
 	if (isString(key)) {
-		const result = value === null ? newObject() : copyObject(value as ValueObject);
+		const result = value == null ? newObject() : copyObject(value as ValueObject);
 		result[key] = updated;
 		return result;
 	} else if (isNumber(key)) {
-		const array = value === null ? [] : [ ...value as Value[] ];
+		const array = value == null ? [] : [ ...value as Value[] ];
 		const whole = Math.trunc(key);
 		if (Number.isNaN(whole)) {
 			throw new JqError('Cannot set array element at NaN index');
@@ -315,10 +315,10 @@ function setKey(value: Value, key: Value, updated: Value): Value {
 		array[at] = updated;
 		return array;
 	} else if (isObject(key)) {
-		if (!Array.isArray(updated)) {
+		if (!isArray(updated)) {
 			throw new JqError('A slice of an array can only be assigned another array');
 		}
-		const array = value === null ? [] : value as Value[];
+		const array = value == null ? [] : value as Value[];
 		const from = key.start ?? null;
 		const to = key.end ?? null;
 		if ((from !== null && !isNumber(from)) || (to !== null && !isNumber(to))) {
@@ -390,7 +390,7 @@ function resolved(root: Value, path: Value[]): Value[] {
 function comparePaths(left: Value[], right: Value[]): number {
 	const length = Math.min(left.length, right.length);
 	for (let ii = 0; ii < length; ++ii) {
-		const order = compareKeys(left[ii]!, right[ii]!);
+		const order = compareKeys(left[ii], right[ii]);
 		if (order !== 0) {
 			return order;
 		}
@@ -419,8 +419,8 @@ function compareKeys(left: Value, right: Value): number {
 function deleteAt(value: Value, path: Value[], depth: number): Value {
 	if (depth === path.length) {
 		return null;
-	} else if (value === null) {
-		return null;
+	} else if (value == null) {
+		return value;
 	}
 	const key = path[depth]!;
 	if (depth === path.length - 1) {
@@ -444,7 +444,7 @@ function deleteKey(value: Value, key: Value): Value {
 		delete result[key];
 		return result;
 	} else if (isNumber(key)) {
-		if (!Array.isArray(value)) {
+		if (!isArray(value)) {
 			throw new JqError(`Cannot delete field at array index of ${typeOf(value)}`);
 		}
 		const whole = Math.trunc(key);
@@ -458,7 +458,7 @@ function deleteKey(value: Value, key: Value): Value {
 		}
 		return [ ...value.slice(0, at), ...value.slice(at + 1) ];
 	} else if (isObject(key)) {
-		if (!Array.isArray(value)) {
+		if (!isArray(value)) {
 			throw new JqError(`Cannot delete slice of ${typeOf(value)}`);
 		}
 		const from = key.start ?? null;
@@ -480,14 +480,16 @@ function deleteKey(value: Value, key: Value): Value {
  */
 export class Editor {
 	private root: Value;
+	private readonly absent: Value;
 	private readonly owned = new Set<object>();
 
-	constructor(root: Value) {
+	constructor(root: Value, absent: Value = undefined) {
 		this.root = root;
+		this.absent = absent;
 	}
 
 	get(path: Value): Value {
-		return getpath(this.root, path);
+		return getpath(this.root, path, this.absent);
 	}
 
 	set(path: Value, value: Value): void {
@@ -536,7 +538,7 @@ export function halt(code: number, value?: Value): never {
 
 /** `.[]?` — the elements of a container, or nothing at all for anything else. */
 export function iterateOptional(value: Value): Iterable<Value> {
-	if (Array.isArray(value)) {
+	if (isArray(value)) {
 		return value;
 	} else if (isObject(value)) {
 		return Object.values(value);

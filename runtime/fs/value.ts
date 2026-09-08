@@ -57,7 +57,7 @@ function statOf(at: string): fs.Stats {
 }
 
 /** A directory's entries, in name order, each stat'd as it is read. */
-export function *children(parent: Entry): Generator<Value> {
+export function *children(parent: Entry): Generator<Value, void> {
 	const names = function() {
 		try {
 			return fs.readdirSync(parent.path);
@@ -71,7 +71,7 @@ export function *children(parent: Entry): Generator<Value> {
 }
 
 /** An entry and everything beneath it, itself first; links are not followed. */
-export function *walk(root: Value): Generator<Value> {
+export function *walk(root: Value): Generator<Value, void> {
 	yield root;
 	if (isEntry(root) && root.type === 'directory') {
 		for (const child of children(root)) {

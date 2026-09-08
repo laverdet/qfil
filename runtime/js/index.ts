@@ -18,11 +18,11 @@ import type { Context, Env, Filter, LibFunction, Path, Render, Resumed, Stream, 
 import { compare, truthy } from './value.js';
 import { Await, awaited, each, feed, firstOf, forward, isTask, overload, runtimePathFunction, streams, task, values } from '#/compiler/filter.js';
 import * as intrinsics from '#/runtime/lang/intrinsics.js';
-import { assertArray, assertNumber, assertString, unary, withFilter, withPath } from '#/runtime/lang/library.js';
+import { assertArray, assertNumber, assertString, getpathOver, unary, withFilter, withPath } from '#/runtime/lang/library.js';
 import { ordered } from '#/runtime/lang/order.js';
 import { matching, regex } from '#/runtime/lang/regexp.js';
 import { conditionals } from '#/runtime/lang/truth.js';
-import { JqError, describe, fromjson as fromjsonOf, isNumber, isObject, isString, newObject, tojson as tojsonOf, tostring as tostringOf, typeOf } from '#/runtime/lang/value.js';
+import { JqError, describe, fromjson as fromjsonOf, isArray, isNumber, isObject, isString, newObject, tojson as tojsonOf, tostring as tostringOf, typeOf } from '#/runtime/lang/value.js';
 
 export * from './date.js';
 export * from './math.js';
@@ -61,7 +61,7 @@ function flattened(value: Value, depth: number): Value[] {
 }
 
 function toEntries(value: Value): Value[] {
-	if (Array.isArray(value)) {
+	if (isArray(value)) {
 		return value.map((element, ii) => ({ __proto__: null, key: ii, value: element }));
 	} else if (isObject(value)) {
 		return Object.keys(value).map(key => ({ __proto__: null, key, value: value[key]! }));
@@ -70,14 +70,14 @@ function toEntries(value: Value): Value[] {
 }
 
 /** `walk(f)`: `f` applied bottom-up; a member whose result is empty is dropped, as `|=` drops it. */
-function *walking(value: Value, env: Env, filter: Stream): Generator<Value> {
+function *walking(value: Value, env: Env, filter: Stream): Generator {
 	const inner = function() {
 		if (Array.isArray(value)) {
 			return mapOver(value, element => walking(element, env, filter));
 		} else if (isObject(value)) {
 			const result = newObject();
 			for (const key of Object.keys(value)) {
-				const [ output ] = walking(value[key]!, env, filter);
+				const [ output ] = walking(value[key], env, filter);
 				if (output !== undefined) {
 					result[key] = output;
 				}
@@ -184,18 +184,7 @@ export const tonumber = unary(input => {
 });
 export const tojson = unary(input => tojsonOf(input));
 export const fromjson = unary(input => fromjsonOf(assertString(input, 'fromjson')));
-export const getpath: LibFunction = runtimePathFunction(
-	values(intrinsics.getpath),
-	(render, path) => {
-		const paths = render.generator(path);
-		return function*(prefix, value, env) {
-			for (const sub of paths(value, env)) {
-				const found = intrinsics.getpath(value, sub);
-				yield [ [ ...prefix, ...sub as Value[] ], found ];
-			}
-		};
-	},
-);
+export const getpath = getpathOver(undefined);
 export const setpath = values(intrinsics.setpath);
 export const delpaths = values(intrinsics.delpaths);
 export const paths: LibFunction = _render => function*(input) {
@@ -217,13 +206,16 @@ export const from_entries = unary(input => {
 		const key = function() {
 			for (const name of [ 'key', 'Key', 'name' ] as const) {
 				const found = intrinsics.field(entry, name);
-				if (found !== null && found !== false) {
+				if (found != null && found !== false) {
 					return found;
 				}
 			}
 			return intrinsics.field(entry, 'Name');
 		}();
-		const value = intrinsics.has(entry, 'value') ? intrinsics.field(entry, 'value') : intrinsics.field(entry, 'Value');
+		// The fallback reads as null in both flavors, as jq's builtin has it
+		const value = intrinsics.has(entry, 'value')
+			? intrinsics.field(entry, 'value')
+			: intrinsics.field(entry, 'Value', null);
 		result[intrinsics.toKey(key)] = value;
 	}
 	return result;
@@ -273,6 +265,9 @@ export const del = withPath(paths => {
 		return (input, env) => intrinsics.delpaths(input, [ ...paths([], input, env) ].map(([ path ]) => path));
 	}
 });
+/** `undefined`: the value itself — a member an object holds without JSON ever seeing it, what a missing read yields. */
+const undefinedOf: LibFunction = _render => () => undefined;
+export { undefinedOf as undefined };
 export const first = overload(
 	unary(input => assertArray(input, 'first')[0] ?? null),
 	runtimePathFunction(
@@ -285,7 +280,7 @@ export const first = overload(
 				return task(function*(path, value, env) {
 					const found = yield* firstOf(filter(path, value, env));
 					if (found !== undefined) {
-						yield found;
+						yield found[0];
 					}
 				});
 			} else {

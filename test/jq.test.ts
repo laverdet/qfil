@@ -187,6 +187,19 @@ agree('jq runtime: what its own suite taught', [
 	[ '"c" | [match("(?<x>a)?b?")]' ],
 	// The binary on PATH is built with decnum, as the jq flavor's spelled literals claim to be
 	[ 'have_decnum, have_literal_numbers' ],
+	// The JavaScript flavor's `undefined` is not spoken here
+	[ 'undefined' ],
+]);
+
+agree('a missing member reads as null, where the JavaScript flavor reads undefined', [
+	[ '{} | .a.b.c' ],
+	[ '[1] | .[5], .[-5], .[1e10]' ],
+	[ '{} | .constructor, .toString' ],
+	[ '[] | first, last' ],
+	[ '[[1]] | .[0] as [$a, $b] | $a, $b' ],
+	[ '$ENV.__nonexistent__' ],
+	[ '{} | {a: .a}' ],
+	[ '{} | getpath(["a", "b"])' ],
 ]);
 
 // Core-language departures, raised here because jq compatibility is this flavor's claim

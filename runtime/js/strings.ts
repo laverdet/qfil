@@ -28,13 +28,13 @@ function indicesOf(input: Value, needle: Value): Value {
 				return found;
 			}
 			for (let at = 0; at + needle.length <= input.length; ++at) {
-				if (needle.every((element, ii) => equal(input[at + ii]!, element))) {
+				if (needle.every((element, ii) => equal(input[at + ii], element))) {
 					found.push(at);
 				}
 			}
 		} else {
 			for (let at = 0; at < input.length; ++at) {
-				if (equal(input[at]!, needle)) {
+				if (equal(input[at], needle)) {
 					found.push(at);
 				}
 			}

@@ -14,7 +14,7 @@ import { runtimePathFunction } from '#/compiler/filter.js';
 
 export function conditionals(truthy: (value: Value) => boolean) {
 	/** `def until(cond; update): if cond then . else (update | until(cond; update)) end;` */
-	function *untilTruthy(state: Value, env: Env, cond: Stream, update: Stream): Generator<Value | Recur> {
+	function *untilTruthy(state: Value, env: Env, cond: Stream, update: Stream): Generator {
 		for (const test of cond(state, env)) {
 			if (truthy(test)) {
 				yield state;
@@ -27,7 +27,7 @@ export function conditionals(truthy: (value: Value) => boolean) {
 	}
 
 	/** `def while(cond; update): if cond then ., (update | while(cond; update)) else empty end;` */
-	function *looping(state: Value, env: Env, cond: Stream, update: Stream): Generator<Value | Recur> {
+	function *looping(state: Value, env: Env, cond: Stream, update: Stream): Generator {
 		for (const test of cond(state, env)) {
 			if (truthy(test)) {
 				yield state;

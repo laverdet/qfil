@@ -9,7 +9,7 @@ import type { Handler, Value } from '#/compiler/filter.js';
 import { compare, spelled, truthy } from './value.js';
 import { combine } from '#/compiler/filter.js';
 import { divide, negate as negateNumber } from '#/runtime/lang/intrinsics.js';
-import { alternativeOver, assignOver, binaryOver, ifOver, logicalOver, operators, sliceOver } from '#/runtime/lang/runtime.js';
+import { alternativeOver, assignOver, binaryOver, ifOver, indexOver, logicalOver, objectOver, operators, sliceOver } from '#/runtime/lang/runtime.js';
 import { JqError, describe, isNumber } from '#/runtime/lang/value.js';
 
 export * from '#/runtime/js/runtime.js';
@@ -72,7 +72,7 @@ export const literal: Handler<ast.Literal> = {
 	},
 };
 export const negate: Handler<ast.Negate> = {
-	value: (node, render) => combine([ render.filter(node.operand) ], ([ value ]) => negated(value!)),
+	value: (node, render) => combine([ render.filter(node.operand) ], ([ value ]) => negated(value)),
 };
 /** jq's `/`: dividing by zero is an error, where JavaScript's gives an infinity. */
 function divided(left: Value, right: Value): Value {
@@ -84,8 +84,11 @@ function divided(left: Value, right: Value): Value {
 
 const ops = { ...operators(compare), '/': divided, '%': modulo };
 
+// A missing member reads as null here, where the JavaScript flavor reads undefined
+export const index = indexOver(null);
+export const object = objectOver(null);
 export const binary = binaryOver(ops);
-export const assign = assignOver(ops, truthy);
+export const assign = assignOver(ops, truthy, null);
 export const { and, or } = logicalOver(truthy);
 export const alternative = alternativeOver(truthy);
 const ifOf = ifOver(truthy);

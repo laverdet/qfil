@@ -63,6 +63,21 @@ divergent('truth and numbers are JavaScript\'s', [
 	[ '[.[] | round]', [ 2.5, 3.5, -1.5, -2.5, -0.5 ], [ [ 3, 4, -1, -2, -0 ] ] ],
 ]);
 
+divergent('undefined is JavaScript\'s absent value', [
+	// A value in its own right: an object holds it where JSON never sees it, an array writes it null
+	[ '[1, undefined, 2]', null, [ [ 1, null, 2 ] ] ],
+	[ 'undefined // "d"', null, [ 'd' ] ],
+	[ '{} | {a: .a} | tojson', null, [ '{}' ] ],
+	[ '{a: undefined} | has("a")', null, [ true ] ],
+	// A missing member reads as undefined, not null — through fields, indices, $ENV, destructuring
+	[ '{} | .a.b.c | type', null, [ 'undefined' ] ],
+	[ '{} | .a == null', null, [ false ] ],
+	[ '[1] | .[5] | type', null, [ 'undefined' ] ],
+	[ '[] | first | type', null, [ 'undefined' ] ],
+	[ '[[1]] | .[0] as [$a, $b] | $b | type', null, [ 'undefined' ] ],
+	[ '$ENV.__nonexistent__ | type', null, [ 'undefined' ] ],
+]);
+
 divergent('what only the binary can say', [
 	[ 'have_decnum', null, [ false ] ],
 	[ 'have_literal_numbers', null, [ false ] ],

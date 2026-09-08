@@ -298,7 +298,8 @@ function patternVariables(pattern: ast.Pattern, into: string[] = []): string[] {
 
 /** A compiled program: a function of its input, and its shape. */
 export interface Program {
-	readonly filter: (input: Value) => Value | Iterable<Value> | AsyncIterable<Value>;
+	/** The outputs: one value, an iteration, or an async iteration, as `stream` and `awaits` say. */
+	readonly filter: (input: Value) => Value;
 	readonly stream: boolean;
 	/** Whether the program awaits: its filter is then an async iteration, each output settled as it comes. */
 	readonly awaits: boolean;
@@ -472,7 +473,7 @@ class Compiler {
 		const slot = scope.variable(node.name);
 		if (slot !== undefined) {
 			const distance = scope.distance(slot);
-			return (_input, env) => lookup(env, distance) as Value;
+			return (_input, env) => lookup(env, distance);
 		} else if (node.name === 'ENV') {
 			const env = this.ctx.env;
 			return () => env;
@@ -543,7 +544,7 @@ class Compiler {
 		const distance = scope.distance(binding.slot);
 		switch (binding.kind) {
 			case 'value':
-				return (_input, env) => lookup(env, distance) as Value;
+				return (_input, env) => lookup(env, distance);
 			case 'param': {
 				const site: Stream = function*(input, env) {
 					const bound = lookup(env, distance) as BoundClosure;
@@ -738,13 +739,15 @@ class Compiler {
 			}
 			return callee;
 		};
+		// Aliased past the `if`: the predicate's negation narrows to never, a single's `unknown` return subsuming a stream's
+		const mixed: readonly Filter[] = filters;
 		if (allSingle(filters)) {
 			const singles: readonly Single[] = filters;
 			const callee = (bound: Bound, env: Env, input: Value): Env[] => [ build(bound, env, singles.map(filter => filter(input, env))) ];
 			return Object.assign(callee, { streams: false, task: false, params });
 		}
-		const streams = filters.map(generator);
-		const awaits = filters.some(isTask);
+		const streams = mixed.map(generator);
+		const awaits = mixed.some(isTask);
 		const callee = awaits
 			? function*(bound: Bound, env: Env, input: Value): Generator<Env, void, Resumed> {
 				yield* each(product(streams, input, env, 'first'), function*(values) {

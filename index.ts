@@ -79,8 +79,13 @@ function createContext(options: RunOptions): Context {
 		}),
 		// An underscore-prefixed name is internal, and hidden as jq hides its own
 		builtins: () => [ ...new Set([
-			...Object.entries(options.lib).flatMap(([ name, fn ]) =>
-				(fn[arities] ?? [ Math.max(fn.length - 1, 0) ]).map(count => `${name}/${count}`)),
+			...Object.entries(options.lib).flatMap(([ name, fn ]) => {
+				if (fn === undefined) {
+					return [];
+				} else {
+					return (fn[arities] ?? [ Math.max(fn.length - 1, 0) ]).map(count => `${name}/${count}`);
+				}
+			}),
 			...(options.runtime.prelude?.().defs ?? []).map(def => `${def.name}/${def.params.length}`),
 		]) ].filter(name => !name.startsWith('_')),
 	};

@@ -34,7 +34,7 @@ function epochOf(value: Value): number {
 		throw new JqError(`${describe(value)} cannot be parsed as a broken-down time`);
 	}
 	const fields = [ 0, 1, 2, 3, 4, 5 ].map(ii => {
-		const field = value[ii] ?? 0;
+		const field: Value = value[ii] ?? 0;
 		if (!isNumber(field)) {
 			throw new JqError(`${describe(field)} cannot be a field of a broken-down time`);
 		}
@@ -72,7 +72,7 @@ function directive(spec: string, tm: readonly number[], local: boolean): string 
 		case 'n': return '\n';
 		case 'p': return hh < 12 ? 'AM' : 'PM';
 		case 'R': return `${pad(hh, 2)}:${pad(mm, 2)}`;
-		case 's': return String(epochOf(tm as Value));
+		case 's': return String(epochOf(tm));
 		case 'S': return pad(seconds, 2);
 		case 't': return '\t';
 		case 'T': return `${pad(hh, 2)}:${pad(mm, 2)}:${pad(seconds, 2)}`;

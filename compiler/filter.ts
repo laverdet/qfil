@@ -14,14 +14,15 @@ import type * as ast from './ast.js';
 import type { Prelude } from './parser.js';
 
 /**
- * The values a filter reads and writes: plain JSON as JavaScript already holds it — `null`,
- * booleans, numbers, strings, arrays and objects.
+ * The values a filter reads and writes. The language's own values are plain JSON as JavaScript
+ * already holds it — `null`, booleans, numbers, strings, arrays and objects — but the type is
+ * `unknown`, because a library function may traffic in anything JavaScript has: `undefined` (a
+ * value of the js flavor), bigints, symbols, boxed numbers and strings, an embedder's own
+ * objects. What each construct accepts is the runtime's to check.
  */
-export type Value = null | boolean | number | string | Value[] | ValueObject;
+export type Value = unknown;
 
-export interface ValueObject {
-	[key: string]: Value;
-}
+export type ValueObject = Record<string, Value>;
 
 /** A path into a value: the keys and indices from the root, as `path(f)` yields them. */
 export type Path = Value[];
@@ -243,10 +244,11 @@ export function feed<Item>(iterable: Iterable<Item>, body: (item: Item) => void)
 }
 
 /**
- * The first item of a stream that may await, its `Await`s forwarded along the way; `undefined`
- * when there is none. The stream is closed either way, as taking the first output must.
+ * The first item of a stream that may await, its `Await`s forwarded along the way — boxed, so
+ * that a stream whose first output is the value `undefined` is not mistaken for one with none.
+ * The stream is closed either way, as taking the first output must.
  */
-export function *firstOf<Item>(outputs: Iterable<Item>): Generator<never, Item | undefined, Resumed> {
+export function *firstOf<Item>(outputs: Iterable<Item>): Generator<never, readonly [ Item ] | undefined, Resumed> {
 	const iterator = outputs[Symbol.iterator]() as Iterator<Item, unknown, Resumed>;
 	try {
 		let next = iterator.next();
@@ -255,7 +257,7 @@ export function *firstOf<Item>(outputs: Iterable<Item>): Generator<never, Item |
 			if (item instanceof Await) {
 				next = yield* forward(item, iterator);
 			} else {
-				return item;
+				return [ item ];
 			}
 		}
 		return undefined;
@@ -500,7 +502,7 @@ export class Bounce {
 
 	/** A bounce for the tail channel, as the `Value` the types cannot spell. */
 	static of(body: Single, input: Value, env: Env): Value {
-		return new Bounce(body, input, env) as unknown as Value;
+		return new Bounce(body, input, env);
 	}
 
 	/** One call: the value, or the next bounce. */
@@ -528,7 +530,7 @@ export class Tail {
 
 	/** A stream's tail call, as the `Value` the types cannot spell. */
 	static of(stream: () => Iterable<Value>): Value {
-		return new Tail(stream) as unknown as Value;
+		return new Tail(stream);
 	}
 }
 
@@ -622,7 +624,8 @@ export interface LibFunction {
 	readonly [arities]?: readonly number[];
 }
 
-export type Lib = Readonly<Record<string, LibFunction>>;
+/** The library, name to function; an entry explicitly `undefined` unsays a name a flavor laid underneath. */
+export type Lib = Readonly<Record<string, LibFunction | undefined>>;
 
 /** A library function that is also a path expression: its value form, then its path form. */
 export function runtimePathFunction<Fn extends LibFunction>(value: Fn, path: NonNullable<LibFunction[typeof pathForm]>): Fn {
@@ -740,8 +743,10 @@ export function combine(filters: readonly Filter[], body: (values: Value[], inpu
 			return (input, env) => body(filters.map(filter => filter(input, env)), input, env);
 		}
 	} else {
-		const streams = filters.map(generator);
-		if (filters.some(isTask)) {
+		// Aliased: the predicate's negation narrows to never, a single's `unknown` return subsuming a stream's
+		const mixed: readonly Filter[] = filters;
+		const streams = mixed.map(generator);
+		if (mixed.some(isTask)) {
 			return task(function*(input, env) {
 				yield* each(product(streams, input, env, slowest), function*(values) {
 					yield body(values, input, env);

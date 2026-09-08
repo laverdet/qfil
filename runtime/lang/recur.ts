@@ -5,14 +5,15 @@
 import type { Value } from '#/compiler/filter.js';
 
 export class Recur {
-	readonly step: Iterable<Value | Recur>;
+	/** Outputs and `Recur`s alike — one type, since a value is anything. */
+	readonly step: Iterable<Value>;
 
-	constructor(step: Iterable<Value | Recur>) {
+	constructor(step: Iterable<Value>) {
 		this.step = step;
 	}
 }
 
-export function *unroll(step: Iterable<Value | Recur>): Generator<Value> {
+export function *unroll(step: Iterable<Value>): Generator {
 	const stack = [ step[Symbol.iterator]() ];
 	while (stack.length > 0) {
 		const next = stack[stack.length - 1]!.next();

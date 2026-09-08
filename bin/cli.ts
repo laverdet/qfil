@@ -52,7 +52,7 @@ function sortKeys(value: Value): Value {
 	} else if (isObject(value)) {
 		const sorted = newObject();
 		for (const key of Object.keys(value).sort(compareStrings)) {
-			sorted[key] = sortKeys(value[key]!);
+			sorted[key] = sortKeys(value[key]);
 		}
 		return sorted;
 	} else {
@@ -151,8 +151,11 @@ async function main(command: Command, argv: readonly string[]): Promise<number> 
 	}();
 	const raw = flags['raw-output'] === true || flags['join-output'] === true;
 	const separator = flags['join-output'] === true ? '' : '\n';
-	let last: Value | undefined;
+	// Written or not is its own flag: `undefined` is a value of the js flavor, not the absence of one
+	let wrote = false;
+	let last: Value = null;
 	const write = (value: Value) => {
+		wrote = true;
 		last = value;
 		const sorted = flags['sort-keys'] === true ? sortKeys(value) : value;
 		const line = raw && isString(sorted) ? String(sorted) : tojson(sorted, indent);
@@ -180,10 +183,12 @@ async function main(command: Command, argv: readonly string[]): Promise<number> 
 	}
 	if (flags['exit-status'] !== true) {
 		return 0;
-	} else if (last === undefined) {
-		return 4;
+	}
+	// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- set in `write`, which narrowing cannot see
+	if (wrote) {
+		return last == null || last === false ? 1 : 0;
 	} else {
-		return last === null || last === false ? 1 : 0;
+		return 4;
 	}
 }
 

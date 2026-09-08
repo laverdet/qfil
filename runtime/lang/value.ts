@@ -8,7 +8,7 @@
  */
 import type { Value, ValueObject } from '#/compiler/filter.js';
 
-export type ValueType = 'null' | 'boolean' | 'number' | 'string' | 'array' | 'object';
+export type ValueType = 'null' | 'boolean' | 'number' | 'string' | 'array' | 'object' | 'undefined' | 'bigint' | 'symbol' | 'function';
 
 /**
  * An error a filter raised — `error("…")`, a failed index, a type mismatch. It carries a value, as
@@ -28,8 +28,8 @@ export class JqError extends Error {
 /** Thrown by `halt` and `halt_error`; the driver exits with the code. */
 export class Halt {
 	readonly code: number;
-	/** What `halt_error` was given, to print before exiting; `halt` has none. */
-	readonly value: Value | undefined;
+	/** What `halt_error` was given, to print before exiting; undefined for `halt`, which gives none. */
+	readonly value: Value;
 
 	constructor(code: number, value?: Value) {
 		this.code = code;
@@ -39,7 +39,8 @@ export class Halt {
 
 export function typeOf(value: Value): ValueType {
 	const type = typeof value;
-	if (type === 'boolean' || type === 'number' || type === 'string') {
+	if (type !== 'object') {
+		// boolean, number, string — and JavaScript's others, which only ever arrive from outside
 		return type;
 	} else if (value === null) {
 		return 'null';
@@ -64,6 +65,11 @@ export function isString(value: Value): value is string {
 	return typeof value === 'string' || value instanceof String;
 }
 
+/** `Array.isArray`, narrowing to `Value[]` rather than `any[]`. */
+export function isArray(value: Value): value is Value[] {
+	return Array.isArray(value);
+}
+
 export function isObject(value: Value): value is ValueObject {
 	return typeof value === 'object' && value !== null && !Array.isArray(value) && !(value instanceof Number) && !(value instanceof String);
 }
@@ -85,10 +91,12 @@ export function describe(value: Value): string {
 /**
  * Writes a value as JSON, compact, and with `indent` spaces per level when asked. Infinite numbers
  * are written as the largest finite ones, as jq writes them; NaN is `null`, as JSON has nothing
- * else; and -0 keeps its sign, which `JSON.stringify` would drop.
+ * else; -0 keeps its sign, which `JSON.stringify` would drop; a bigint writes its digits. A value
+ * JSON cannot say at all — `undefined`, a symbol — writes as JavaScript speaks it.
  */
 export function tojson(value: Value, indent?: number | string): string {
-	return JSON.stringify(value, replacer, indent);
+	// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- stringify returns undefined for undefined and symbols, whatever its declared type
+	return JSON.stringify(value, replacer, indent) ?? String(value);
 }
 
 function replacer(this: unknown, _key: string, value: unknown): unknown {
@@ -96,6 +104,8 @@ function replacer(this: unknown, _key: string, value: unknown): unknown {
 		return value > 0 ? Number.MAX_VALUE : -Number.MAX_VALUE;
 	} else if (value === 0 && Object.is(value, -0)) {
 		return JSON.rawJSON('-0');
+	} else if (typeof value === 'bigint') {
+		return JSON.rawJSON(value.toString());
 	}
 	return value;
 }
@@ -139,13 +149,15 @@ export function equal(left: Value, right: Value): boolean {
 	} else if (typeof left !== 'object' || typeof right !== 'object' || left === null || right === null) {
 		return false;
 	} else if (Array.isArray(left)) {
-		return Array.isArray(right) && left.length === right.length && left.every((value, ii) => equal(value, right[ii]!));
+		return Array.isArray(right) && left.length === right.length && left.every((value, ii) => equal(value, right[ii]));
 	} else if (Array.isArray(right)) {
 		return false;
 	} else {
-		const keys = Object.keys(left);
-		return keys.length === Object.keys(right).length &&
-			keys.every(key => Object.hasOwn(right, key) && equal(left[key]!, right[key]!));
+		const lhs = left as ValueObject;
+		const rhs = right as ValueObject;
+		const keys = Object.keys(lhs);
+		return keys.length === Object.keys(rhs).length &&
+			keys.every(key => Object.hasOwn(rhs, key) && equal(lhs[key], rhs[key]));
 	}
 }
 
@@ -168,7 +180,7 @@ function containedIn(left: Value, right: Value): boolean {
 	} else if (Array.isArray(left) && Array.isArray(right)) {
 		return right.every(element => left.some(item => containedIn(item, element)));
 	} else if (isObject(left) && isObject(right)) {
-		return Object.keys(right).every(key => Object.hasOwn(left, key) && containedIn(left[key]!, right[key]!));
+		return Object.keys(right).every(key => Object.hasOwn(left, key) && containedIn(left[key], right[key]));
 	} else {
 		return equal(left, right);
 	}

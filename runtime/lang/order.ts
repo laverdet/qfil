@@ -20,7 +20,7 @@ export function ordered(compareValues: (left: Value, right: Value) => number) {
 		const rhs = right as Value[];
 		const length = Math.min(lhs.length, rhs.length);
 		for (let ii = 0; ii < length; ++ii) {
-			const order = compareValues(lhs[ii]!, rhs[ii]!);
+			const order = compareValues(lhs[ii], rhs[ii]);
 			if (order !== 0) {
 				return order;
 			}
@@ -29,17 +29,17 @@ export function ordered(compareValues: (left: Value, right: Value) => number) {
 	};
 	// Indices of `items` sorted by their keys, keeping order among equal keys
 	const order = (items: Value[], keys: Value[], by: Comparison): number[] =>
-		items.map((_value, ii) => ii).sort((left, right) => by(keys[left]!, keys[right]!) || left - right);
+		items.map((_value, ii) => ii).sort((left, right) => by(keys[left], keys[right]) || left - right);
 	const groups = (items: Value[], keys: Value[], by: Comparison): Value[][] => {
 		const result: Value[][] = [];
-		let previous: Value | undefined;
+		let previous: Value = null;
 		for (const ii of order(items, keys, by)) {
 			const key = keys[ii]!;
-			if (result.length === 0 || by(previous!, key) !== 0) {
+			if (result.length === 0 || by(previous, key) !== 0) {
 				result.push([]);
 				previous = key;
 			}
-			result[result.length - 1]!.push(items[ii]!);
+			result[result.length - 1]!.push(items[ii]);
 		}
 		return result;
 	};
@@ -78,7 +78,7 @@ export function ordered(compareValues: (left: Value, right: Value) => number) {
 			let hi = items.length;
 			while (lo < hi) {
 				const mid = (lo + hi) >> 1;
-				const order = compareValues(items[mid]!, value);
+				const order = compareValues(items[mid], value);
 				if (order === 0) {
 					return mid;
 				} else if (order < 0) {
@@ -94,7 +94,7 @@ export function ordered(compareValues: (left: Value, right: Value) => number) {
 	function least(items: Value[], keys: Value[], by: Comparison): Value {
 		let found: number | null = null;
 		for (let ii = 0; ii < items.length; ++ii) {
-			if (found === null || by(keys[ii]!, keys[found]!) < 0) {
+			if (found === null || by(keys[ii], keys[found]) < 0) {
 				found = ii;
 			}
 		}
@@ -104,7 +104,7 @@ export function ordered(compareValues: (left: Value, right: Value) => number) {
 	function greatest(items: Value[], keys: Value[], by: Comparison): Value {
 		let found: number | null = null;
 		for (let ii = 0; ii < items.length; ++ii) {
-			if (found === null || by(keys[ii]!, keys[found]!) >= 0) {
+			if (found === null || by(keys[ii], keys[found]) >= 0) {
 				found = ii;
 			}
 		}

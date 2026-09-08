@@ -65,8 +65,7 @@ function canonical(text: string): string {
 /** A number with its spelling, when that says more than the number does. */
 export function spelled(value: number, text: string): Value {
 	const written = canonical(text);
-	// A boxed number is a `Value` in behavior; the contract's type cannot spell it
-	return written === String(value) ? value : new Numeral(value, written) as unknown as Value;
+	return written === String(value) ? value : new Numeral(value, written);
 }
 
 const literalRegex = /^-?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
@@ -325,7 +324,19 @@ export function fromjson(text: string): Value {
 	}
 }
 
-const typeOrder: Readonly<Record<ValueType, number>> = { null: 0, boolean: 1, number: 2, string: 3, array: 4, object: 5 };
+// The kinds beyond jq's six only ever arrive from outside; they sort beneath everything, undefined first
+const typeOrder: Readonly<Record<ValueType, number>> = {
+	undefined: -2,
+	symbol: -1,
+	bigint: -1,
+	function: -1,
+	null: 0,
+	boolean: 1,
+	number: 2,
+	string: 3,
+	array: 4,
+	object: 5,
+};
 
 /**
  * jq's total order: null < false < true < numbers < strings < arrays < objects. Strings compare by
@@ -358,12 +369,18 @@ export function compare(left: Value, right: Value): number {
 		}
 		case 'string':
 			return compareStrings(left as string, right as string);
+		case 'bigint':
+		case 'function':
+		case 'symbol':
+		case 'undefined':
+			// The kinds beyond jq's six: ranked apart above, tied within
+			return 0;
 		case 'array': {
 			const lhs = left as Value[];
 			const rhs = right as Value[];
 			const length = Math.min(lhs.length, rhs.length);
 			for (let ii = 0; ii < length; ++ii) {
-				const order = compare(lhs[ii]!, rhs[ii]!);
+				const order = compare(lhs[ii], rhs[ii]);
 				if (order !== 0) {
 					return order;
 				}
@@ -380,7 +397,7 @@ export function compare(left: Value, right: Value): number {
 				return order;
 			}
 			for (const key of lhsKeys) {
-				const order = compare(lhs[key]!, rhs[key]!);
+				const order = compare(lhs[key], rhs[key]);
 				if (order !== 0) {
 					return order;
 				}

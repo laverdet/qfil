@@ -20,7 +20,7 @@ function iterated(value: Value, otherwise: (value: Value) => Iterable<Value>): I
 
 export const iterate: Handler<ast.Iterate> = {
 	...js.iterate,
-	value: (node, render) => combineStreams([ render.filter(node.target) ], ([ value ]) => iterated(value!, iterateOf)),
+	value: (node, render) => combineStreams([ render.filter(node.target) ], ([ value ]) => iterated(value, iterateOf)),
 };
 export const recurse: Handler<ast.RecurseAll> = {
 	...js.recurse,
@@ -33,7 +33,7 @@ const tryOf: Handler<ast.Try> = {
 	value: (node, render) => {
 		if (node.handler === null && node.body.type === 'iterate') {
 			// `.[]?`, as the JavaScript runtime special-cases it, over directories too
-			return combineStreams([ render.filter(node.body.target) ], ([ value ]) => iterated(value!, iterateOptional));
+			return combineStreams([ render.filter(node.body.target) ], ([ value ]) => iterated(value, iterateOptional));
 		} else {
 			return js.try.value(node, render);
 		}
