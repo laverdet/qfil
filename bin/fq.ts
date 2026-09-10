@@ -4,11 +4,11 @@
  * is a path to start from, `.` when none; `.[]` of a directory is its entries and `..` walks.
  */
 import type { Command } from './cli.js';
-import type { Value } from 'qfil/compiler/filter.js';
+import type { Value } from '@laverdet/qfil/compiler/filter.js';
 import process from 'node:process';
-import * as runtime from 'qfil/runtime/fs/runtime.js';
-import { entry } from 'qfil/runtime/fs/value.js';
-import * as lib from 'qfil/runtime/js/index.js';
+import * as runtime from '@laverdet/qfil/runtime/fs/runtime.js';
+import { entry } from '@laverdet/qfil/runtime/fs/value.js';
+import * as lib from '@laverdet/qfil/runtime/js/index.js';
 import { execute } from './cli.js';
 
 const USAGE = `usage: fq [options] <filter> [root...]

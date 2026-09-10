@@ -5,8 +5,8 @@ JavaScript function of its input from the functions a runtime gives each piece o
 
 ```ts
 import { compile, run } from 'qfil';
-import { lib } from 'qfil/runtime/js/index.js';
-import { runtime } from 'qfil/runtime/js/runtime.js';
+import { lib } from '@laverdet/qfil/runtime/js/index.js';
+import { runtime } from '@laverdet/qfil/runtime/js/runtime.js';
 
 const filter = compile('.items[] | select(.price > 10) | .name', { runtime, lib });
 [ ...filter({ items: [ { name: 'a', price: 5 }, { name: 'b', price: 20 } ] }) ]; // [ 'b' ]

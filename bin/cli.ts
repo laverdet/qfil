@@ -3,14 +3,14 @@
  * binary supplies its name and usage, its flags beyond the shared set, and how a parsed command
  * line becomes a runtime, a library and the inputs of a run.
  */
-import type { Value } from 'qfil/compiler/filter.js';
-import type { RunOptions } from 'qfil/index.js';
+import type { Value } from '@laverdet/qfil/compiler/filter.js';
+import type { RunOptions } from '@laverdet/qfil/index.js';
 import process from 'node:process';
 import * as util from 'node:util';
-import { CompileError } from 'qfil/compiler/filter.js';
-import { ParseError } from 'qfil/compiler/parser.js';
-import { compile } from 'qfil/index.js';
-import { Halt, JqError, compareStrings, isObject, isString, newObject, tojson } from 'qfil/runtime/lang/value.js';
+import { CompileError } from '@laverdet/qfil/compiler/filter.js';
+import { ParseError } from '@laverdet/qfil/compiler/parser.js';
+import { compile } from '@laverdet/qfil/index.js';
+import { Halt, JqError, compareStrings, isObject, isString, newObject, tojson } from '@laverdet/qfil/runtime/lang/value.js';
 
 export type Flags = Readonly<Record<string, string | boolean | undefined>>;
 
