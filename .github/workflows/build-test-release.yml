@@ -1,0 +1,40 @@
+name: qfil
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  build-test-release:
+    name: Build, Test, Release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      # Setup
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: v26
+      - uses: pnpm/action-setup@v6
+        with:
+          cache: true
+
+      # Build & test
+      - run: |
+          pnpm install --frozen-lockfile
+          pnpm run -s build
+          pnpm run -s lint
+
+      # Publish to npm
+      - if: github.repository == 'laverdet/qfil' && github.ref_name == 'main' && github.event_name == 'push'
+        id: publish
+        shell: sh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pnpm publish --no-git-checks --provenance
+      - if: steps.publish.outcome == 'skipped'
+        shell: sh
+        run: pnpm publish --dry-run --no-git-checks
