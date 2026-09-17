@@ -5,6 +5,7 @@
  */
 import type { Value } from '@laverdet/qfil/compiler/filter.js';
 import type { RunOptions } from '@laverdet/qfil/index.js';
+import { once } from 'node:events';
 import process from 'node:process';
 import * as util from 'node:util';
 import { CompileError } from '@laverdet/qfil/compiler/filter.js';
@@ -154,24 +155,31 @@ async function main(command: Command, argv: readonly string[]): Promise<number> 
 	// Written or not is its own flag: `undefined` is a value of the js flavor, not the absence of one
 	let wrote = false;
 	let last: Value = null;
-	const write = (value: Value) => {
+	/** Writes an output; false when stdout has taken all it will buffer, and the run waits for it to drain. */
+	const write = (value: Value): boolean => {
 		wrote = true;
 		last = value;
 		const sorted = flags['sort-keys'] === true ? sortKeys(value) : value;
 		const line = raw && isString(sorted) ? String(sorted) : tojson(sorted, indent);
-		process.stdout.write(`${flags['ascii-output'] === true ? escapeNonAscii(line) : line}${separator}`);
+		return process.stdout.write(`${flags['ascii-output'] === true ? escapeNonAscii(line) : line}${separator}`);
 	};
+	// Waiting is also what lets a closed pipe be heard: an endless synchronous stream yields the thread here
+	const drained = () => once(process.stdout, 'drain');
 	const run = async (input: Value) => {
 		if (filter.awaits) {
 			for await (const output of filter(input)) {
-				write(output);
+				if (!write(output)) {
+					await drained();
+				}
 			}
 		} else if (filter.stream) {
 			for (const output of filter(input)) {
-				write(output);
+				if (!write(output)) {
+					await drained();
+				}
 			}
-		} else {
-			write(filter(input));
+		} else if (!write(filter(input))) {
+			await drained();
 		}
 	};
 	if (flags['null-input'] === true) {
@@ -194,6 +202,14 @@ async function main(command: Command, argv: readonly string[]): Promise<number> 
 
 /** A binary's whole run: `main`, with errors written under its name and turned into jq's exit codes. */
 export async function execute(command: Command, argv: readonly string[]): Promise<number> {
+	// A reader that closed the pipe — `| head` — ends the run there and quietly, as SIGPIPE ends
+	// jq's, and with its status: node ignores the signal and fails the write instead
+	process.stdout.on('error', (error: NodeJS.ErrnoException) => {
+		if (error.code === 'EPIPE') {
+			process.exit(141);
+		}
+		throw error;
+	});
 	try {
 		return await main(command, argv);
 	} catch (error) {

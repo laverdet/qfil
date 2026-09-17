@@ -38,9 +38,6 @@ const USAGE = `usage: qfil [options] <filter> [file...]
   -h, --help
 `;
 
-/** The stream's text, a chunk at a time. */
-const texts = (source: Readable): AsyncIterable<string> => source as AsyncIterable<string>;
-
 /** The stream's lines, CRLF or LF, each yielded as its newline arrives. */
 const lines = (source: Readable): AsyncIterable<string> =>
 	readline.createInterface({ input: source, crlfDelay: Infinity });
@@ -50,7 +47,7 @@ const lines = (source: Readable): AsyncIterable<string> =>
  * concatenated JSON values for the jq flavor, JSON Lines for JavaScript's.
  */
 const flavors: Readonly<Record<string, { readonly options: Pick<RunOptions, 'lib' | 'runtime'>; readonly values: (source: Readable) => AsyncIterable<Value> }>> = {
-	jq: { options: { runtime: jqRuntime, lib: jqLib }, values: source => concatenated(texts(source), jqFromjson) },
+	jq: { options: { runtime: jqRuntime, lib: jqLib }, values: source => concatenated(source, jqFromjson) },
 	js: { options: { runtime: jsRuntime, lib: jsLib }, values: source => jsonLines(lines(source)) },
 };
 
@@ -142,16 +139,15 @@ function scanString(text: string, start: number): number | 'more' {
 	return 'more';
 }
 
-/** Standard input, or each file in turn, as one stream of text. */
+/** Standard input, or the files end to end as jq reads them — nothing between one and the next — as one stream of text, a file read as it is asked for, a chunk at a time. */
 function source(files: readonly string[]): Readable {
 	if (files.length === 0) {
 		process.stdin.setEncoding('utf8');
 		return process.stdin;
 	}
 	return Readable.from(async function*(): AsyncIterable<string> {
-		for (const [ index, file ] of files.entries()) {
-			const text = await fs.promises.readFile(file, 'utf8');
-			yield index === 0 ? text : `\n${text}`;
+		for (const file of files) {
+			yield* fs.createReadStream(file, 'utf8');
 		}
 	}());
 }
@@ -175,7 +171,7 @@ const qfil: Command = {
 			if (flags['raw-input'] === true) {
 				if (flags.slurp === true) {
 					let text = '';
-					for await (const chunk of texts(input)) {
+					for await (const chunk of input) {
 						text += chunk;
 					}
 					yield text;
