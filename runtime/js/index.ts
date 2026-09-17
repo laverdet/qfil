@@ -10,7 +10,8 @@
  * An argument is whatever the function makes of it: `values` evaluates arguments as jq's `$`
  * parameters (once per combination of their outputs); `render.generator` takes one as a filter to
  * run; `render.path` takes one as a path expression; and `constant` reads a literal off the
- * syntax, which is how `test("^a")` compiles its pattern once.
+ * syntax — or the sum of constant strings or numbers — which is how `test("^a")` compiles its
+ * pattern once.
  *
  * `compile` takes a `lib` option, so an application may supply a library of its own.
  */

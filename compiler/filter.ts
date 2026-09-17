@@ -810,7 +810,22 @@ export function promises(render: Render, args: readonly ast.Node[], body: (input
 	});
 }
 
-/** The literal a node spells out, if it is one; what a library function reads to do work up front. */
+/**
+ * The literal a node spells out, if it is one; what a library function reads to do work up front.
+ * The sum of two strings, or of two numbers, that are themselves constant is one too — that much
+ * of `+` is no runtime's to say — and the compiler renders it as the literal it comes to.
+ */
 export function constant(node: ast.Node): ast.Scalar | undefined {
-	return node.type === 'literal' ? node.value : undefined;
+	if (node.type === 'literal') {
+		return node.value;
+	} else if (node.type === 'binary' && node.op === '+') {
+		const left = constant(node.left);
+		const right = constant(node.right);
+		if (typeof left === 'string' && typeof right === 'string') {
+			return left + right;
+		} else if (typeof left === 'number' && typeof right === 'number') {
+			return left + right;
+		}
+	}
+	return undefined;
 }

@@ -658,6 +658,7 @@ agree('what jq\'s own suite taught', [
 	[ '[scan("(a)|(b)")], [scan("(x)?b")], [scan("A"; "i")]', 'ab' ],
 	[ '[capture("(?<c>.)"; "g")], capture(["(?<x>A)", "i"])', 'ab' ],
 	[ '. as $s | [("a", "z") as $p | $s | test($p), test([ $p ]), [match($p).offset], [splits($p)]]', 'ab' ],
+	[ 'sub("" + "a"; "X"), [scan("[a-" + "z]")], 1 + 2, "a" + "b" + "c", 1 + 2 + length, [path(1 + 2)?]', 'ab' ],
 	// A literal pattern compiles on the first call, not with the program, so its error is caught
 	[ 'try test("(") catch "E", try sub("("; "x") catch "E", try capture("("; null) catch "E"', 'ab' ],
 	[ 'try test(1) catch ., try capture({}) catch ., try match([]) catch .', 'ab' ],
@@ -712,6 +713,11 @@ describe('compiled shape', () => {
 			),
 		};
 		assert.deepEqual(run('double, twice(. + 1), length, plus(1), plus(. * 2), plus(1; 2)', 2, { lib: custom }), [ 4, 3, 3, 2, 3, 6, 5 ]);
+		// The sum of constant strings, or of constant numbers, is a constant; nothing else is
+		const reads = { ...lib, read: ((_render, arg) => () => constant(arg) ?? 'no') satisfies Lib[string] };
+		assert.deepEqual(
+			run('read("" + "a" + "b"), read(1 + 2 + 3), read("a" + 1), read(1 - 1), read(null + 1), read("a" + .), read(("a", "b") + "c")', null, { lib: reads }),
+			[ 'ab', 6, 'no', 'no', 'no', 'no', 'no' ]);
 		assert.throws(() => compile('plus(1; 2; 3)', { lib: custom }), { message: 'plus/3: no definition takes 3 arguments at line 1, column 1' });
 		assert.throws(() => compile('1 | map(.; .)'), { message: 'map/2 is not defined at line 1, column 5' });
 		assert.throws(() => compile('double', { lib: {} }), { message: 'double/0 is not defined at line 1, column 1' });

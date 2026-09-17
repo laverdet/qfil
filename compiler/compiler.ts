@@ -13,7 +13,7 @@
  */
 import type * as ast from './ast.js';
 import type { Context, Env, Filter, Handled, Handler, Lib, LibFunction, PathFilter, Render, Resumed, Runtime, Single, Stream, Value } from './filter.js';
-import { Bounce, Break, CompileError, Tail, abreast, allSingle, driven, each, feed, generator, isStream, isTask, lookup, over, pathCall, product, push, settle, task, unrolled } from './filter.js';
+import { Bounce, Break, CompileError, Tail, abreast, allSingle, constant, driven, each, feed, generator, isStream, isTask, lookup, over, pathCall, product, push, settle, task, unrolled } from './filter.js';
 
 /** A definition: the filters of its body, called with its own frame and its parameters pushed on the environment it closed over. */
 interface Definition {
@@ -373,8 +373,10 @@ class Compiler {
 			case 'break':
 				return this.breakOut(node, scope);
 			case 'identity': case 'recurse': case 'literal': case 'string': case 'format': case 'index': case 'slice': case 'iterate': case 'try':
-			case 'pipe': case 'comma': case 'binary': case 'and': case 'or': case 'alternative': case 'negate': case 'assign': case 'if': case 'loc': case 'array': case 'object':
-				return this.handler(node).value(node, this.renderer(scope, tail));
+			case 'pipe': case 'comma': case 'binary': case 'and': case 'or': case 'alternative': case 'negate': case 'assign': case 'if': case 'loc': case 'array': case 'object': {
+				const collapsed = this.collapsed(node);
+				return this.handler(collapsed).value(collapsed, this.renderer(scope, tail));
+			}
 		}
 	}
 
@@ -401,15 +403,22 @@ class Compiler {
 				return this.invalid(this.value(node, scope));
 			case 'identity': case 'recurse': case 'literal': case 'string': case 'format': case 'index': case 'slice': case 'iterate': case 'try':
 			case 'pipe': case 'comma': case 'binary': case 'and': case 'or': case 'alternative': case 'negate': case 'assign': case 'if': case 'loc': case 'array': case 'object': {
-				const handler = this.handler(node);
+				const collapsed = this.collapsed(node);
+				const handler = this.handler(collapsed);
 				return handler.path === undefined
-					? this.invalid(handler.value(node, this.renderer(scope)))
-					: handler.path(node, this.renderer(scope));
+					? this.invalid(handler.value(collapsed, this.renderer(scope)))
+					: handler.path(collapsed, this.renderer(scope));
 			}
 		}
 	}
 
 	// -- The runtime --
+
+	/** A node as the runtime is handed it: an expression that is constant is the literal it comes to. */
+	private collapsed(node: Handled): Handled {
+		const value = node.type === 'literal' ? undefined : constant(node);
+		return value === undefined ? node : { type: 'literal', value, at: node.at };
+	}
 
 	private handler(node: Handled): Handler<Handled> {
 		// Each handler takes its own node type; the switch that reaches here has matched them up

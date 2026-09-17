@@ -120,7 +120,9 @@ function's decision, as it is in jq where `def has($k)` is sugar for a filter pa
 `as`: `values` evaluates arguments as `$` parameters, once per combination of their outputs;
 `render.generator` takes one as a filter to run itself, as `map` and `select` do; `render.path` takes
 one as a path expression, as `path` and `del` do; and a function may read a literal straight off the
-syntax — `test("^a")` compiles its pattern once, at instantiation, and never again. There are no
+syntax — `test("^a")` compiles its pattern once, and never again. `constant` is that reading: a
+literal, or the sum of constant strings or of constant numbers, so `test("^" + "a")` is no
+different — and the compiler hands the runtime such a sum as the literal it comes to. There are no
 annotations saying which parameters are which, because nothing decides that ahead of the function.
 
 The one thing a body cannot say is that it is also a path expression, since that is a second
