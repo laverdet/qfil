@@ -1,7 +1,10 @@
 /** The `qfil` binary: its command line, its input and output, how it ends. */
 import * as assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { describe, it } from 'node:test';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { after, describe, it } from 'node:test';
 import { invoke, launch } from './harness.js';
 
 const qfil = (args: readonly string[], input?: string) => invoke('qfil', args, input);
@@ -12,6 +15,17 @@ describe('qfil', () => {
 	});
 	it('binds --arg and --argjson', async () => {
 		assert.deepEqual(await qfil([ '-n', '-r', '--arg', 'who', 'world', '--argjson', 'n', '[1,2]', '"hello \\($who) \\($n | length)"' ]), { status: 0, stdout: 'hello world 2\n', stderr: '' });
+	});
+	it('reads the filter from a file, every argument then an input', async () => {
+		const root = fs.mkdtempSync(path.join(os.tmpdir(), 'qfil-'));
+		after(() => fs.rmSync(root, { recursive: true }));
+		const script = path.join(root, 'script.jq');
+		const data = path.join(root, 'data.json');
+		fs.writeFileSync(script, '# A comment\n.a + 1\n');
+		fs.writeFileSync(data, '{"a":1}');
+		assert.deepEqual(await qfil([ '-f', script ], '{"a":2}'), { status: 0, stdout: '3\n', stderr: '' });
+		assert.deepEqual(await qfil([ '--from-file', script, data ]), { status: 0, stdout: '2\n', stderr: '' });
+		assert.equal((await qfil([ data, '-f' ])).status, 2);
 	});
 	it('slurps, reads raw lines, and pretty prints', async () => {
 		assert.equal((await qfil([ '-s', '-c', 'add' ], '1 2 3')).stdout, '6\n');

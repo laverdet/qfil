@@ -6,6 +6,7 @@
 import type { Value } from '@laverdet/qfil/compiler/filter.js';
 import type { RunOptions } from '@laverdet/qfil/index.js';
 import { once } from 'node:events';
+import * as fs from 'node:fs';
 import process from 'node:process';
 import * as util from 'node:util';
 import { CompileError } from '@laverdet/qfil/compiler/filter.js';
@@ -36,8 +37,9 @@ export interface Command {
 	};
 }
 
-/** The flags every binary takes: the input policy, the output shape, bindings and exit status. */
+/** The flags every binary takes: the filter's file, the input policy, the output shape, bindings and exit status. */
 const sharedOptions = {
+	'from-file': { type: 'string', short: 'f' },
 	'null-input': { type: 'boolean', short: 'n' },
 	'raw-output': { type: 'boolean', short: 'r' },
 	'join-output': { type: 'boolean', short: 'j' },
@@ -107,7 +109,13 @@ function parsed(argv: readonly string[], options: Readonly<Record<string, { read
 			positionals.push(token.value);
 		} else if (token.kind === 'option') {
 			if (Object.hasOwn(options, token.name)) {
-				flags[token.name] = options[token.name]!.type === 'boolean' ? true : token.value;
+				if (options[token.name]!.type === 'boolean') {
+					flags[token.name] = true;
+				} else {
+					flags[token.name] = token.value ?? function() {
+						throw new UsageError(`${token.rawName} takes a value`);
+					}();
+				}
 			} else if (lifted.has(token.index)) {
 				// Another piece of an argument already taken whole as a positional
 			} else if (/^-(?:\d|\.\d)/.test(argv[token.index]!)) {
@@ -128,7 +136,9 @@ async function main(command: Command, argv: readonly string[]): Promise<number> 
 		process.stdout.write(command.usage);
 		return 0;
 	}
-	const [ source, ...files ] = positionals;
+	// With `-f` the filter is the file's text, and every positional is an input
+	const fromFile = flags['from-file'];
+	const [ source, ...files ] = typeof fromFile === 'string' ? [ fs.readFileSync(fromFile, 'utf8'), ...positionals ] : positionals;
 	if (source === undefined) {
 		process.stderr.write(command.usage);
 		return 2;

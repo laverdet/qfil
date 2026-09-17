@@ -21,6 +21,7 @@ import { execute } from './cli.js';
 
 const USAGE = `usage: qfil [options] <filter> [file...]
 
+  -f, --from-file <file> read the filter from a file; every argument is then an input
   -n, --null-input       use null as the input; the inputs are read by \`input\` and \`inputs\`
   -R, --raw-input        read each line of input as a string
   -s, --slurp            read all inputs into one array

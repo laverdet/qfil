@@ -17,8 +17,8 @@ run('[.[] | . * 2]', [ 1, 2, 3 ], { runtime, lib }); // [ [ 2, 4, 6 ] ]
 The runtime and library are explicit: `compile` bundles nothing by default, so an application
 that uses one runtime carries only that one.
 
-At a shell, `qfil` takes jq's common flags: `qfil -c '.[] | .name' data.json`, `-n`, `-r`, `-s`, `-R`,
-`-S`, `--arg`, `--argjson`, `--tab`, `--indent` and `-e`. Its default runtime is the jq one —
+At a shell, `qfil` takes jq's common flags: `qfil -c '.[] | .name' data.json`, `-f`, `-n`, `-r`, `-s`,
+`-R`, `-S`, `--arg`, `--argjson`, `--tab`, `--indent` and `-e`. Its default runtime is the jq one —
 spelled numbers, jq's total order — and `--runtime js` selects JavaScript's doubles and order.
 `fq` is the filesystem runtime as a binary of its own.
 

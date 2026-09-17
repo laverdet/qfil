@@ -15,6 +15,7 @@ const USAGE = `usage: fq [options] <filter> [root...]
 
   Each root is a path to query, \`.\` when none is given.
 
+  -f, --from-file <file> read the filter from a file; every argument is then an input
   -n, --null-input       use null as the input; the roots are read by \`input\` and \`inputs\`
   -r, --raw-output       write strings without quotes
   -j, --join-output      raw output, without newlines
