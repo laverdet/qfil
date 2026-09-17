@@ -1,16 +1,16 @@
 /**
- * The functions that match a regex — `test`, `match`, `split`, `sub`, `gsub` — over a
- * `RegexCompiler`, since what a pattern and its flags mean is a flavor's to say: `regex` is
- * JavaScript's reading, flags included, and the jq flavor translates jq's onto it. `u` and `d`
- * are always set, so patterns are Unicode-aware and captures carry offsets; offsets are UTF-16
- * code units.
+ * The functions that match a regex — `test`, `match`, `capture`, `scan`, `split`, `splits`, `sub`,
+ * `gsub` — over a `RegexCompiler`, since what a pattern and its flags mean is a flavor's to say:
+ * `regex` is JavaScript's reading, flags included, and the jq flavor translates jq's onto it. `u`
+ * is always set, so patterns are Unicode-aware; `d` is `match`'s to ask for, whose captures carry
+ * offsets, in UTF-16 code units.
  */
 import type * as ast from '#/compiler/ast.js';
 import type { Env, LibFunction, Render, Stream, Value, ValueObject } from '#/compiler/filter.js';
 import { split } from './intrinsics.js';
 import { assertString } from './library.js';
-import { JqError, describe, isString, newObject } from './value.js';
-import { constant, overload, streams, values } from '#/compiler/filter.js';
+import { JqError, describe, isArray, isString, newObject, typeOf } from './value.js';
+import { constant, once, overload, streams, values } from '#/compiler/filter.js';
 
 /** Builds the RegExp of a match call: what the pattern and flags mean is the library's to say — JavaScript's reading here, jq's in the jq library. */
 export type RegexCompiler = (pattern: Value, flags: Value, extra: string) => RegExp;
@@ -22,7 +22,7 @@ export function regex(pattern: Value, flags: Value, extra = ''): RegExp {
 		throw new JqError(`${describe(flags)} is not a string`);
 	}
 	try {
-		return new RegExp(pattern, [ ...new Set(`du${flags ?? ''}${extra}`) ].join(''));
+		return new RegExp(pattern, [ ...new Set(`u${flags ?? ''}${extra}`) ].join(''));
 	} catch (error) {
 		throw new JqError((error as Error).message);
 	}
@@ -31,23 +31,45 @@ export function regex(pattern: Value, flags: Value, extra = ''): RegExp {
 /** Runs `body` with a regex for each combination of the pattern and flag arguments' outputs. */
 type WithRegex = (input: Value, env: Env, body: (regex: RegExp, input: Value) => Iterable<Value>) => Iterable<Value>;
 
-/** A regex from its arguments — compiled once when both are literals, otherwise per call: the syntax is there to be read. */
-function regexOf(compile: RegexCompiler, render: Render, pattern: ast.Node, flags: ast.Node | null, extra = ''): WithRegex {
-	const literalPattern = constant(pattern);
-	const literalFlags = flags === null ? null : constant(flags);
-	if (literalPattern !== undefined && literalFlags !== undefined) {
-		const compiled = compile(literalPattern, literalFlags, extra);
-		return (input, _env, body) => body(compiled, input);
+/** What the regex arguments of a call say: the pattern, and the flags. */
+type Reading = (...args: Value[]) => readonly [ pattern: Value, flags: Value ];
+
+/** The pattern, and the flags when they are given. */
+const plain: Reading = (pattern, flags) => [ pattern, flags ?? null ];
+
+/** jq's sugar for one argument: the pattern alone, or `[pattern, flags]`. */
+const sugar: Reading = value => {
+	if (isString(value)) {
+		return [ value, null ];
+	} else if (isArray(value) && value.length > 0) {
+		return [ value[0], value[1] ?? null ];
 	} else {
-		const args = streams(render, flags === null ? [ pattern ] : [ pattern, flags ], function*(_input, re, fl) {
-			yield [ re, fl ?? null ];
+		throw new JqError(`${typeOf(value)} not a string or array`);
+	}
+};
+
+/**
+ * A regex from its arguments — compiled once, on the first call, when they are all literals,
+ * otherwise whenever they change from one call to the next: the syntax is there to be read.
+ */
+function regexOf(compile: RegexCompiler, render: Render, args: readonly ast.Node[], read: Reading, extra: string): WithRegex {
+	const literals = args.map(constant);
+	if (literals.every(literal => literal !== undefined)) {
+		const compiled = once(() => {
+			const [ pattern, flags ] = read(...literals);
+			return compile(pattern, flags, extra);
 		});
-		let last: { readonly re: Value; readonly fl: Value; readonly compiled: RegExp } | null = null;
+		return (input, _env, body) => body(compiled(), input);
+	} else {
+		const readings = streams(render, args, function*(_input, ...vals) {
+			yield read(...vals);
+		});
+		let last: { readonly pattern: Value; readonly flags: Value; readonly compiled: RegExp } | null = null;
 		return function*(input, env, body) {
-			for (const pair of args(input, env)) {
-				const [ re, fl ] = pair as [ Value, Value ];
-				if (last === null || last.re !== re || last.fl !== fl) {
-					last = { re, fl, compiled: compile(re, fl, extra) };
+			for (const reading of readings(input, env)) {
+				const [ pattern, flags ] = reading as ReturnType<Reading>;
+				if (last === null || last.pattern !== pattern || last.flags !== flags) {
+					last = { pattern, flags, compiled: compile(pattern, flags, extra) };
 				}
 				yield* body(last.compiled, input);
 			}
@@ -95,11 +117,15 @@ export function matchObject(match: RegExpExecArray, names: readonly (string | nu
 	return { __proto__: null, offset: match.index, length: match[0].length, string: match[0], captures };
 }
 
-/** The named groups of a match as an object, null for the ones that did not participate. */
-function namedGroups(match: RegExpExecArray): ValueObject {
+/** The named groups of a match as an object; one that did not participate is null, or left out when only the `participating` are asked for. */
+export function namedGroups(match: RegExpExecArray, participating = false): ValueObject {
 	const result = newObject();
 	for (const [ name, string ] of Object.entries<string | undefined>(match.groups ?? {})) {
-		result[name] = string ?? null;
+		if (string !== undefined) {
+			result[name] = string;
+		} else if (!participating) {
+			result[name] = null;
+		}
 	}
 	return result;
 }
@@ -133,23 +159,34 @@ function *substitute(regex: RegExp, input: Value, replacement: (groups: Value) =
 	}
 }
 
-/** `match/2` and `test/2`; the 1-arity forms, and their `[re, flags]` array sugar, are the prelude's dispatch. */
-export function regexFunction(compile: RegexCompiler, extra: string, body: (regex: RegExp, input: Value) => Iterable<Value>): LibFunction {
-	return (render, pattern, flags) => function*(input, env) {
-		yield* regexOf(compile, render, pattern, flags, extra)(input, env, body);
+/**
+ * A function of a regex and its input, of one or two arguments: the pattern and the flags, or
+ * either the pattern alone or — for the ones jq gives the sugar — `[pattern, flags]`.
+ */
+export function regexFunction(compile: RegexCompiler, extra: string, body: (regex: RegExp, input: Value) => Iterable<Value>, one: Reading = sugar): LibFunction {
+	const over = (render: Render, args: readonly ast.Node[], read: Reading): Stream => {
+		const regexes = regexOf(compile, render, args, read, extra);
+		return function*(input, env) {
+			yield* regexes(input, env, body);
+		};
 	};
+	return overload(
+		(render, pattern) => over(render, [ pattern ], one),
+		(render, pattern, flags) => over(render, [ pattern, flags ], plain),
+	);
 }
 
 function subFunction(compile: RegexCompiler, extra: string): LibFunction {
-	const withRegex = (render: Render, regexes: WithRegex, replacementNode: ast.Node): Stream => {
+	const over = (render: Render, args: readonly ast.Node[], replacementNode: ast.Node): Stream => {
+		const regexes = regexOf(compile, render, args, plain, extra);
 		const replacement = render.generator(replacementNode);
 		return function*(input, env) {
 			yield* regexes(input, env, (compiled, text) => substitute(compiled, text, groups => replacement(groups, env)));
 		};
 	};
 	return overload(
-		(render, pattern, replacement) => withRegex(render, regexOf(compile, render, pattern, null, extra), replacement),
-		(render, pattern, replacement, flags) => withRegex(render, regexOf(compile, render, pattern, flags, extra), replacement),
+		(render, pattern, replacement) => over(render, [ pattern ], replacement),
+		(render, pattern, replacement, flags) => over(render, [ pattern, flags ], replacement),
 	);
 }
 
@@ -170,37 +207,55 @@ function matchNames(match: RegExpExecArray): (string | null)[] {
 	return match.indices!.slice(1).map(range => range === undefined ? null : byRange.get(range) ?? null);
 }
 
-function *splitWith(compiled: RegExp, input: Value): Generator {
+/** `capture` in the JavaScript reading: an unmatched group has no name, so it is left out. */
+function captureWith(compiled: RegExp, input: Value): Value[] {
+	return execAll(compiled, input).map(match => namedGroups(match, true));
+}
+
+/** `scan`: each match's captures when the pattern has groups — null for one that did not participate — otherwise its string. */
+function scanWith(compiled: RegExp, input: Value): Value[] {
+	return execAll(compiled, input).map(match => {
+		const captures: readonly (string | undefined)[] = match.slice(1);
+		return captures.length > 0 ? captures.map(string => string ?? null) : match[0];
+	});
+}
+
+/** What is left of the input between the matches of a global regex. */
+function piecesWith(compiled: RegExp, input: Value): string[] {
 	const text = assertString(input, 'split');
 	const pieces: string[] = [];
 	let previous = 0;
-	for (const match of text.matchAll(compiled)) {
-		if (ignoresEmpty(compiled) && match[0] === '') {
-			continue;
-		}
+	for (const match of execAll(compiled, text)) {
 		pieces.push(text.slice(previous, match.index));
 		previous = match.index + match[0].length;
 	}
 	pieces.push(text.slice(previous));
-	yield pieces;
+	return pieces;
 }
 
 /**
- * The functions that match a regex — `test`, `match`, `split`, `sub`, `gsub` — over a compiler,
- * since what a pattern and its flags mean is the library's to say: JavaScript's reading in this
- * one, jq's in the jq library.
+ * The functions that match a regex — `test`, `match`, `capture`, `scan`, `split`, `splits`, `sub`,
+ * `gsub` — over a compiler, since what a pattern and its flags mean is the library's to say:
+ * JavaScript's reading in this one, jq's in the jq library. `match` alone asks for `d`, the
+ * offsets of its captures.
  */
 export function matching(compile: RegexCompiler) {
 	return {
 		test: regexFunction(compile, '', testWith),
-		match: regexFunction(compile, '', matchWith),
+		match: regexFunction(compile, 'd', matchWith),
+		capture: regexFunction(compile, '', captureWith),
+		scan: regexFunction(compile, 'g', scanWith, plain),
 		sub: subFunction(compile, ''),
 		gsub: subFunction(compile, 'g'),
 		split: overload(
 			values((input, value) => split(assertString(input, 'split'), assertString(value, 'split'))),
-			(render, pattern, flags) => function*(input, env) {
-				yield* regexOf(compile, render, pattern, flags, 'g')(input, env, splitWith);
+			(render, pattern, flags) => {
+				const regexes = regexOf(compile, render, [ pattern, flags ], plain, 'g');
+				return function*(input, env) {
+					yield* regexes(input, env, (compiled, text) => [ piecesWith(compiled, text) ]);
+				};
 			},
 		),
+		splits: regexFunction(compile, 'g', piecesWith, plain),
 	};
 }

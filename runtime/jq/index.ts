@@ -16,7 +16,7 @@ export * from '#/runtime/js/index.js';
 export * from './date.js';
 export * from './math.js';
 export { round } from './math.js';
-export { match } from './regexp.js';
+export { capture, match } from './regexp.js';
 
 /** The whitespace jq's trims strip: JavaScript's own set, and U+0085 (NEL), which C's `iswspace` counts too. */
 const leading = /^[\s\u0085]+/;
@@ -32,7 +32,7 @@ export const { not, select, until, any, all } = conds;
 const { while: whileOf } = conds;
 export { whileOf as while };
 export const { sort, sort_by, group_by, unique, unique_by, min, max, min_by, max_by, bsearch } = ordered(compare);
-export const { test, sub, gsub, split } = matching(oniguruma);
+export const { test, scan, sub, gsub, split, splits } = matching(oniguruma);
 export const ltrim = unary(input => assertString(input, 'ltrim').replace(leading, ''));
 export const rtrim = unary(input => assertString(input, 'rtrim').replace(trailing, ''));
 export const trim = unary(input => assertString(input, 'trim').replace(leading, '').replace(trailing, ''));

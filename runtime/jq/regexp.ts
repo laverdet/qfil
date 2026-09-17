@@ -4,7 +4,7 @@
  * capture still carries its name.
  */
 import type { RegexCompiler } from '#/runtime/lang/regexp.js';
-import { execAll, ignoringEmpty, matchObject, regex, regexFunction } from '#/runtime/lang/regexp.js';
+import { execAll, ignoringEmpty, matchObject, namedGroups, regex, regexFunction } from '#/runtime/lang/regexp.js';
 import { JqError } from '#/runtime/lang/value.js';
 
 /**
@@ -101,8 +101,11 @@ export const oniguruma: RegexCompiler = (pattern, flags, extra) => {
 	return skipEmpty ? ignoringEmpty(compiled) : compiled;
 };
 
-/** jq's `match/2`: capture names are read off the pattern source, so an unmatched group still carries its name. */
-export const match = regexFunction(oniguruma, '', (compiled, input) => {
+/** jq's `match`: capture names are read off the pattern source, so an unmatched group still carries its name. */
+export const match = regexFunction(oniguruma, 'd', (compiled, input) => {
 	const names = groupNames(compiled.source);
 	return execAll(compiled, input).map(found => matchObject(found, names));
 });
+
+/** jq's `capture`: an unmatched group still carries its name, so it is there, and null. */
+export const capture = regexFunction(oniguruma, '', (compiled, input) => execAll(compiled, input).map(found => namedGroups(found)));

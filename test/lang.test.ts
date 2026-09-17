@@ -655,6 +655,12 @@ agree('what jq\'s own suite taught', [
 	[ 'try sub(["a"]; "X") catch "E"', 'ab' ],
 	[ 'try [splits([","])] catch "E"', 'a,b' ],
 	[ 'try [scan(["a"])] catch "E"', 'ab' ],
+	[ '[scan("(a)|(b)")], [scan("(x)?b")], [scan("A"; "i")]', 'ab' ],
+	[ '[capture("(?<c>.)"; "g")], capture(["(?<x>A)", "i"])', 'ab' ],
+	[ '. as $s | [("a", "z") as $p | $s | test($p), test([ $p ]), [match($p).offset], [splits($p)]]', 'ab' ],
+	// A literal pattern compiles on the first call, not with the program, so its error is caught
+	[ 'try test("(") catch "E", try sub("("; "x") catch "E", try capture("("; null) catch "E"', 'ab' ],
+	[ 'try test(1) catch ., try capture({}) catch ., try match([]) catch .', 'ab' ],
 	[ '[builtins[] | select(startswith("_"))] | length' ],
 ]);
 

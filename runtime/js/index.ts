@@ -387,7 +387,7 @@ export function stderr(this: Context, _render: Render): Filter {
 }
 export const last = unary(input => assertArray(input, 'last').at(-1) ?? null);
 export const { sort, sort_by, group_by, unique, unique_by, min, max, min_by, max_by, bsearch } = ordered(compare);
-export const { test, match, sub, gsub, split } = matching(regex);
+export const { test, match, capture, scan, sub, gsub, split, splits } = matching(regex);
 export const reverse = unary(input => input === null ? [] : [ ...assertArray(input, 'reverse') ].reverse());
 export const flatten = overload(
 	unary(input => flattened(input, Infinity)),

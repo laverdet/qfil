@@ -65,26 +65,6 @@ def transpose: [ range(0; map(length) | max // 0) as $i | [ .[][$i] ] ];
 def pick(pathexps):
 	. as $top |
 	reduce path(pathexps) as $p (null; setpath($p; $top | getpath($p)));
-def _regex($val):
-	if ($val | type) == "string" then
-		[ $val, null ]
-	elif ($val | type) == "array" and ($val | length) > 0 then
-		[ $val[0], $val[1] ]
-	else
-		error(($val | type) + " not a string or array")
-	end;
-def match($val): _regex($val) as [ $re, $flags ] | match($re; $flags);
-def test($val): _regex($val) as [ $re, $flags ] | test($re; $flags);
-def splits($re; $flags): split($re; $flags) | .[];
-def splits($re): splits($re; null);
-def capture($re; $flags):
-	match($re; $flags) |
-	reduce (.captures[] | select(.name != null) | { (.name): .string }) as $pair ({}; . + $pair);
-def capture($val): _regex($val) as [ $re, $flags ] | capture($re; $flags);
-def scan($re; $flags):
-	match($re; "g" + $flags) |
-	if (.captures | length) > 0 then [ .captures[] | .string ] else .string end;
-def scan($re): scan($re; null);
 def finites: select(isfinite);
 def normals: select(isnormal);
 def trimstr($s): ltrimstr($s) | rtrimstr($s);

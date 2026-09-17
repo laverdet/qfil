@@ -229,8 +229,8 @@ JavaScript flavor reads JSON Lines, and `-R` reads lines; nothing waits for the 
 Builtins that the language can define are defined in the language: `Runtime.prelude` is a
 function returning its parsed prelude — the definitions, and their names as the root scope —
 `once(() => definitions(source))`, so the source is read when a program first compiles against
-it and never again — `abs`, `map_values`, `paths(f)`, `any`/`all`, `IN`/`INDEX`, `capture`,
-`scan`, the type filters — in scope of every program compiled with that runtime, exactly as if
+it and never again — `abs`, `map_values`, `paths(f)`, `any`/`all`, `IN`/`INDEX`, `pick`,
+`tostream`, the type filters — in scope of every program compiled with that runtime, exactly as if
 the program began with them; its own definitions shadow them as inner scopes do. Resolution is
 the parse's: a call node carries the definition its name reached lexically, so the prelude's
 internal references are resolved once per process when its source is parsed, and a program's
