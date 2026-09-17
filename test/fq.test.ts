@@ -1,13 +1,11 @@
 /** The filesystem runtime and the `fq` binary. */
 import type { Value } from '#/index.js';
 import * as assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import process from 'node:process';
 import { after, describe, it } from 'node:test';
-import { differential } from './harness.js';
+import { differential, invoke } from './harness.js';
 import { JqError } from '#/index.js';
 import * as fsRuntime from '#/runtime/fs/runtime.js';
 import { entry } from '#/runtime/fs/value.js';
@@ -57,8 +55,7 @@ describe('the filesystem runtime', () => {
 	it('raises a missing path as the language\'s own error', () => {
 		assert.throws(() => entry(path.join(root, 'nope')), JqError);
 	});
-	it('is the fq binary over a root', () => {
-		const result = spawnSync(process.execPath, [ path.join(import.meta.dirname, '..', 'bin', 'fq.js'), '-c', '[.[] | .name]', root ], { encoding: 'utf8' });
-		assert.deepEqual({ status: result.status, stdout: result.stdout }, { status: 0, stdout: '["a.txt","b.ts","sub"]\n' });
+	it('is the fq binary over a root', async () => {
+		assert.deepEqual(await invoke('fq', [ '-c', '[.[] | .name]', root ]), { status: 0, stdout: '["a.txt","b.ts","sub"]\n', stderr: '' });
 	});
 });

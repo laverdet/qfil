@@ -15,6 +15,9 @@ import { Halt, JqError, compareStrings, isObject, isString, newObject, tojson } 
 
 export type Flags = Readonly<Record<string, string | boolean | undefined>>;
 
+/** How much output gathers before it is written, in characters. */
+const blockSize = 1 << 16;
+
 /** A command line the binary cannot read; `execute` answers with the message and the usage. */
 class UsageError extends Error {
 	override name = 'UsageError';
@@ -155,41 +158,85 @@ async function main(command: Command, argv: readonly string[]): Promise<number> 
 	// Written or not is its own flag: `undefined` is a value of the js flavor, not the absence of one
 	let wrote = false;
 	let last: Value = null;
+	// Outputs gather here and reach stdout a block at a time — a write apiece is a system call
+	// apiece — when there is a block's worth, and whenever the run yields the thread: waiting on
+	// its input, it holds nothing back
+	let pending = '';
+	let scheduled = false;
+	/** Writes what has gathered; false when stdout has taken all it will buffer. */
+	const flush = (): boolean => {
+		const text = pending;
+		pending = '';
+		return text === '' || process.stdout.write(text);
+	};
 	/** Writes an output; false when stdout has taken all it will buffer, and the run waits for it to drain. */
 	const write = (value: Value): boolean => {
 		wrote = true;
 		last = value;
 		const sorted = flags['sort-keys'] === true ? sortKeys(value) : value;
 		const line = raw && isString(sorted) ? String(sorted) : tojson(sorted, indent);
-		return process.stdout.write(`${flags['ascii-output'] === true ? escapeNonAscii(line) : line}${separator}`);
+		pending += `${flags['ascii-output'] === true ? escapeNonAscii(line) : line}${separator}`;
+		if (pending.length >= blockSize) {
+			return flush();
+		} else if (!scheduled) {
+			scheduled = true;
+			setImmediate(() => {
+				scheduled = false;
+				flush();
+			});
+		}
+		return true;
 	};
 	// Waiting is also what lets a closed pipe be heard: an endless synchronous stream yields the thread here
 	const drained = () => once(process.stdout, 'drain');
+	// An error ends the run over its input, not the run over the inputs: it is reported and the
+	// next input read, as under jq, and the exit status speaks for the last input
+	let failed = false;
 	const run = async (input: Value) => {
-		if (filter.awaits) {
-			for await (const output of filter(input)) {
-				if (!write(output)) {
-					await drained();
+		try {
+			if (filter.awaits) {
+				for await (const output of filter(input)) {
+					if (!write(output)) {
+						await drained();
+					}
 				}
-			}
-		} else if (filter.stream) {
-			for (const output of filter(input)) {
-				if (!write(output)) {
-					await drained();
+			} else if (filter.stream) {
+				for (const output of filter(input)) {
+					if (!write(output)) {
+						await drained();
+					}
 				}
+			} else if (!write(filter(input))) {
+				await drained();
 			}
-		} else if (!write(filter(input))) {
-			await drained();
+			failed = false;
+		} catch (error) {
+			if (error instanceof JqError) {
+				// What came before the error is seen before it
+				flush();
+				report(command, error);
+				failed = true;
+			} else {
+				throw error;
+			}
 		}
 	};
-	if (flags['null-input'] === true) {
-		await run(null);
-	} else {
-		for await (const input of shared) {
-			await run(input);
+	try {
+		if (flags['null-input'] === true) {
+			await run(null);
+		} else {
+			for await (const input of shared) {
+				await run(input);
+			}
 		}
+	} finally {
+		// However the run ends — a `halt`, an input that does not parse — its outputs are out first
+		flush();
 	}
-	if (flags['exit-status'] !== true) {
+	// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- set in `run`, which narrowing cannot see
+	if (failed) {
+		return 5;
+	} else if (flags['exit-status'] !== true) {
 		return 0;
 	}
 	// eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- set in `write`, which narrowing cannot see
@@ -198,6 +245,10 @@ async function main(command: Command, argv: readonly string[]): Promise<number> 
 	} else {
 		return 4;
 	}
+}
+
+function report(command: Command, error: JqError) {
+	process.stderr.write(`${command.name}: error: ${error.message}\n`);
 }
 
 /** A binary's whole run: `main`, with errors written under its name and turned into jq's exit codes. */
@@ -222,7 +273,8 @@ export async function execute(command: Command, argv: readonly string[]): Promis
 			}
 			return error.code;
 		} else if (error instanceof JqError) {
-			process.stderr.write(`${command.name}: error: ${error.message}\n`);
+			// Outside any input's run: an input that does not parse
+			report(command, error);
 			return 5;
 		} else if (error instanceof ParseError || error instanceof CompileError) {
 			process.stderr.write(`${command.name}: error: ${error.message}\n${command.name}: 1 compile error\n`);

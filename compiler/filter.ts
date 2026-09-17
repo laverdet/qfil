@@ -680,50 +680,67 @@ export function pathCall(fn: LibFunction, ctx: Context, render: Render, args: re
 	return impl === undefined ? render.invalid(fn.call(ctx, render, ...args)) : impl.call(ctx, render, ...args);
 }
 
-/** Every combination of the streams' outputs, the first (or the last) varying slowest, as jq orders them. */
-export function *product(streams: readonly Stream[], input: Value, env: Env, slowest: 'first' | 'last'): Generator<Value[], void, Resumed> {
-	const order = streams.map((_stream, ii) => ii);
+/**
+ * Every combination of the filters' outputs, the first (or the last) varying slowest, as jq orders
+ * them; made once, and run per input. A single's value is set in passing, on the way to the next
+ * stream — evaluated as often as its place in the order has it — so only a stream costs a generator.
+ */
+export function product(filters: readonly Filter[], slowest: 'first' | 'last'): (input: Value, env: Env) => Generator<Value[], void, Resumed> {
+	const order = filters.map((_filter, ii) => ii);
 	if (slowest === 'last') {
 		order.reverse();
 	}
-	const values: Value[] = new Array<Value>(streams.length);
-	if (streams.some(isTask)) {
+	const streams = filters.map(filter => isStream(filter) ? filter : undefined);
+	const combinations = function*(input: Value, env: Env, outputs: (ii: number) => Iterable<Value>): Generator<Value[], void, Resumed> {
+		const values = new Array<Value>(filters.length);
+		/** Sets the singles from `depth` on, and returns the depth of the stream they lead up to. */
+		const settle = (depth: number): number => {
+			let at = depth;
+			for (; at < order.length && streams[order[at]!] === undefined; ++at) {
+				values[order[at]!] = filters[order[at]!]!(input, env);
+			}
+			return at;
+		};
+		const go = function*(depth: number): Generator<Value[], void, Resumed> {
+			const ii = order[depth]!;
+			for (const value of outputs(ii)) {
+				values[ii] = value;
+				const next = settle(depth + 1);
+				if (next === order.length) {
+					yield [ ...values ];
+				} else {
+					yield* go(next);
+				}
+			}
+		};
+		const first = settle(0);
+		if (first === order.length) {
+			yield [ ...values ];
+		} else {
+			yield* go(first);
+		}
+	};
+	if (filters.some(isTask)) {
 		// Every stream is read once, all of them abreast — their awaits settled together — and the
 		// combinations then come off the buffered outputs
-		const buffers = streams.map(() => [] as Value[]);
-		yield* abreast(
-			function*(): Generator<number, void, Resumed> {
-				yield* streams.keys();
-			},
-			function*(ii: number): Generator<never, void, Resumed> {
-				yield* feed(streams[ii]!(input, env), value => buffers[ii]!.push(value));
-			},
-		)();
-		const go = function*(depth: number): Generator<Value[], void, Resumed> {
-			if (depth === order.length) {
-				yield [ ...values ];
-				return;
-			}
-			const ii = order[depth]!;
-			for (const value of buffers[ii]!) {
-				values[ii] = value;
-				yield* go(depth + 1);
-			}
+		return function*(input, env) {
+			const buffers = filters.map(() => [] as Value[]);
+			yield* abreast(
+				function*(): Generator<number, void, Resumed> {
+					for (const ii of streams.keys()) {
+						if (streams[ii] !== undefined) {
+							yield ii;
+						}
+					}
+				},
+				function*(ii: number): Generator<never, void, Resumed> {
+					yield* feed(streams[ii]!(input, env), value => buffers[ii]!.push(value));
+				},
+			)();
+			yield* combinations(input, env, ii => buffers[ii]!);
 		};
-		yield* go(0);
 	} else {
-		const go = function*(depth: number): Generator<Value[], void, Resumed> {
-			if (depth === order.length) {
-				yield [ ...values ];
-				return;
-			}
-			const ii = order[depth]!;
-			for (const value of streams[ii]!(input, env)) {
-				values[ii] = value;
-				yield* go(depth + 1);
-			}
-		};
-		yield* go(0);
+		return (input, env) => combinations(input, env, ii => streams[ii]!(input, env));
 	}
 }
 
@@ -745,16 +762,16 @@ export function combine(filters: readonly Filter[], body: (values: Value[], inpu
 	} else {
 		// Aliased: the predicate's negation narrows to never, a single's `unknown` return subsuming a stream's
 		const mixed: readonly Filter[] = filters;
-		const streams = mixed.map(generator);
+		const combinations = product(mixed, slowest);
 		if (mixed.some(isTask)) {
 			return task(function*(input, env) {
-				yield* each(product(streams, input, env, slowest), function*(values) {
+				yield* each(combinations(input, env), function*(values) {
 					yield body(values, input, env);
 				});
 			});
 		} else {
 			return function*(input, env) {
-				for (const values of product(streams, input, env, slowest)) {
+				for (const values of combinations(input, env)) {
 					yield body(values, input, env);
 				}
 			};
@@ -764,16 +781,16 @@ export function combine(filters: readonly Filter[], body: (values: Value[], inpu
 
 /** As `combine`, for a body that yields. */
 export function combineStreams(filters: readonly Filter[], body: (values: Value[], input: Value, env: Env) => Iterable<Value>, slowest: 'first' | 'last' = 'first'): Stream {
-	const streams = filters.map(generator);
+	const combinations = product(filters, slowest);
 	if (filters.some(isTask)) {
 		return task(function*(input, env) {
-			yield* each(product(streams, input, env, slowest), function*(values) {
+			yield* each(combinations(input, env), function*(values) {
 				yield* body(values, input, env);
 			});
 		});
 	} else {
 		return function*(input, env) {
-			for (const values of product(streams, input, env, slowest)) {
+			for (const values of combinations(input, env)) {
 				yield* body(values, input, env);
 			}
 		};
@@ -801,9 +818,9 @@ export function streams(render: Render, args: readonly ast.Node[], body: (input:
 
 /** As `values`, for a body that returns a promise: each call settled by the driver, out of frame. */
 export function promises(render: Render, args: readonly ast.Node[], body: (input: Value, ...args: Value[]) => Promise<Value>): Filter {
-	const streams = args.map(arg => generator(render.filter(arg)));
+	const combinations = product(args.map(arg => render.filter(arg)), 'first');
 	return task(function*(input, env) {
-		yield* each(product(streams, input, env, 'first'), function*(vals) {
+		yield* each(combinations(input, env), function*(vals) {
 			const value = yield* awaited(body(input, ...vals));
 			yield value;
 		});

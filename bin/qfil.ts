@@ -38,9 +38,18 @@ const USAGE = `usage: qfil [options] <filter> [file...]
   -h, --help
 `;
 
-/** The stream's lines, CRLF or LF, each yielded as its newline arrives. */
-const lines = (source: Readable): AsyncIterable<string> =>
-	readline.createInterface({ input: source, crlfDelay: Infinity });
+/**
+ * The stream's lines, CRLF or LF, each yielded as its newline arrives. The reader closes with the
+ * iteration: left open it goes on pulling the stream through to its end, with nobody listening.
+ */
+async function *lines(source: Readable): AsyncIterable<string> {
+	const reader = readline.createInterface({ input: source, crlfDelay: Infinity });
+	try {
+		yield* reader;
+	} finally {
+		reader.close();
+	}
+}
 
 /**
  * The runtimes a filter can run with, each with how its inputs come off the input stream:
@@ -165,27 +174,32 @@ const qfil: Command = {
 			throw new Error(`--runtime must be one of ${Object.keys(flavors).join(', ')}`);
 		}();
 		// Inputs are read when something first asks for one — `-n` without `input` reads nothing —
-		// and stream: each is yielded as the text completing it arrives
+		// and stream: each is yielded as the text completing it arrives. The stream is this generator's,
+		// and ends with it: a run that stops short — an error, `halt` — leaves nothing open behind it
 		const inputs = async function*(): AsyncIterable<Value> {
-			const input = source(files);
-			if (flags['raw-input'] === true) {
-				if (flags.slurp === true) {
-					let text = '';
-					for await (const chunk of input) {
-						text += chunk;
+			await using input = source(files);
+			try {
+				if (flags['raw-input'] === true) {
+					if (flags.slurp === true) {
+						let text = '';
+						for await (const chunk of input) {
+							text += chunk;
+						}
+						yield text;
+					} else {
+						yield* lines(input);
 					}
-					yield text;
+				} else if (flags.slurp === true) {
+					const all: Value[] = [];
+					for await (const value of flavor.values(input)) {
+						all.push(value);
+					}
+					yield all;
 				} else {
-					yield* lines(input);
+					yield* flavor.values(input);
 				}
-			} else if (flags.slurp === true) {
-				const all: Value[] = [];
-				for await (const value of flavor.values(input)) {
-					all.push(value);
-				}
-				yield all;
-			} else {
-				yield* flavor.values(input);
+			} finally {
+				input.destroy();
 			}
 		}();
 		return { options: flavor.options, inputs };

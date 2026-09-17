@@ -755,16 +755,16 @@ class Compiler {
 			const callee = (bound: Bound, env: Env, input: Value): Env[] => [ build(bound, env, singles.map(filter => filter(input, env))) ];
 			return Object.assign(callee, { streams: false, task: false, params });
 		}
-		const streams = mixed.map(generator);
+		const combinations = product(mixed, 'first');
 		const awaits = mixed.some(isTask);
 		const callee = awaits
 			? function*(bound: Bound, env: Env, input: Value): Generator<Env, void, Resumed> {
-				yield* each(product(streams, input, env, 'first'), function*(values) {
+				yield* each(combinations(input, env), function*(values) {
 					yield build(bound, env, values);
 				});
 			}
 			: function*(bound: Bound, env: Env, input: Value): Generator<Env, void, Resumed> {
-				for (const values of product(streams, input, env, 'first')) {
+				for (const values of combinations(input, env)) {
 					yield build(bound, env, values);
 				}
 			};

@@ -195,6 +195,17 @@ export function newObject(): ValueObject {
 	return Object.create(null) as ValueObject;
 }
 
+/**
+ * Sets each of `source`'s entries on `target`. A loop over the keys rather than a spread or
+ * `Object.assign`, which V8 runs several times slower onto an object with no prototype.
+ */
+export function assignObject(target: ValueObject, source: ValueObject): ValueObject {
+	for (const key of Object.keys(source)) {
+		target[key] = source[key];
+	}
+	return target;
+}
+
 export function copyObject(object: ValueObject): ValueObject {
-	return { __proto__: null, ...object };
+	return assignObject(newObject(), object);
 }

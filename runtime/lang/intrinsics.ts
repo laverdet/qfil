@@ -4,7 +4,7 @@
  * the libraries are built on them too. Nothing here knows about syntax.
  */
 import type { Path, Value, ValueObject } from '#/compiler/filter.js';
-import { Halt, JqError, compareStrings, copyObject, describe, equal, isArray, isNumber, isObject, isString, newObject, tojson, tostring, typeOf } from './value.js';
+import { Halt, JqError, assignObject, compareStrings, copyObject, describe, equal, isArray, isNumber, isObject, isString, newObject, tojson, tostring, typeOf } from './value.js';
 
 export { Halt, JqError, equal, fromjson, tojson, tostring, typeOf } from './value.js';
 
@@ -166,7 +166,7 @@ export function add(left: Value, right: Value): Value {
 	} else if (isArray(left) && isArray(right)) {
 		return [ ...left, ...right ];
 	} else if (isObject(left) && isObject(right)) {
-		return Object.assign(copyObject(left), right);
+		return assignObject(copyObject(left), right);
 	}
 	throw new JqError(`${describe(left)} and ${describe(right)} cannot be added`);
 }

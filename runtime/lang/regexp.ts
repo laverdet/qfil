@@ -120,7 +120,9 @@ export function matchObject(match: RegExpExecArray, names: readonly (string | nu
 /** The named groups of a match as an object; one that did not participate is null, or left out when only the `participating` are asked for. */
 export function namedGroups(match: RegExpExecArray, participating = false): ValueObject {
 	const result = newObject();
-	for (const [ name, string ] of Object.entries<string | undefined>(match.groups ?? {})) {
+	const groups: Readonly<Record<string, string | undefined>> = match.groups ?? {};
+	for (const name of Object.keys(groups)) {
+		const string = groups[name];
 		if (string !== undefined) {
 			result[name] = string;
 		} else if (!participating) {
